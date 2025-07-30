@@ -1,0 +1,14 @@
+version: '3.8'
+
+services:
+  mcp-croit-ceph:
+    build: .
+    image: mcp-croit-ceph:latest
+    container_name: mcp-croit-ceph
+    environment:
+      - CROIT_HOST=${CROIT_HOST}
+      - CROIT_API_TOKEN=${CROIT_API_TOKEN}
+    stdin_open: true
+    tty: true
+    restart: unless-stopped
+
