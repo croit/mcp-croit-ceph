@@ -49,7 +49,12 @@ class ToolParameters:
 
 
 class CroitCephServer:
-    def __init__(self, endpoints_as_tools=False, resolve_references=True, offer_whole_spec=False):
+    def __init__(
+        self,
+        endpoints_as_tools=False,
+        resolve_references=True,
+        offer_whole_spec=False,
+    ):
         self.tools: Dict[str, CroitToolInfo] = {}
         self.mcp_tools: List[types.Tool] = []
         self.api_spec = None

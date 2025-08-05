@@ -50,8 +50,15 @@ Add to `~/.config/claude/config.json`:
 
 ## Developement
 
-Use VS Code/Cursor with the [Black Formatter](https://marketplace.visualstudio.com/items?itemName=ms-python.black-formatter)
+Install git pre-commit hooks:
+
+```bash
+pre-commit install
+```
+
+We use VS Code/Cursor with the [Black Formatter](https://marketplace.visualstudio.com/items?itemName=ms-python.black-formatter)
 plugin installed.
+The pre-commit hooks will also format the code.
 
 Set up a venv and use let your IDE use it:
 

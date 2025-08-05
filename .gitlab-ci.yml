@@ -9,7 +9,16 @@ variables:
     - docker login -u $CI_REGISTRY_USER -p $CI_REGISTRY_PASSWORD $CI_REGISTRY
 
 stages:
+  - lint
   - build
+
+lint:python:
+  stage: lint
+  image: python:3.9-slim
+  before_script:
+    - pip install black
+  script:
+    - black --check --diff .
 
 build:mcp-croit-ceph:
   stage: build
