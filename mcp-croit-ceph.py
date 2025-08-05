@@ -55,20 +55,30 @@ class CroitCephServer:
         resolve_references=True,
         offer_whole_spec=False,
     ):
+        # tools is a map of tool name (as given to and later provided by the LLM) to the tool info.
+        # Each endpoint is represented in this map as a tool.
+        # Only used if endpoints_as_tools is True, as we don't map endpoints otherwise.
         self.tools: Dict[str, CroitToolInfo] = {}
+        # mcp_tools later contains the list of tools that will be advertised to the LLM.
+        # The exact list depends on endpoints_as_tools.
         self.mcp_tools: List[types.Tool] = []
+        # api_spec contains the OpenAPI schema as returned from the cluster.
         self.api_spec = None
+        # host is the cluster URL, e.g. http://172.31.134.4:8080.
         self.host = None
+        # resolved_references will later be set to true when resolve_references is True.
+        # Meaning if True, the spec won't contain any $ref references anymore.
         self.resolved_references = False
+        # session is later used to make the actual API calls to the cluster.
+        self.session = aiohttp.ClientSession()
         self._load_config()
         self._fetch_swagger_spec()
-        self.session = aiohttp.ClientSession()
 
         if resolve_references:
             self._resolve_swagger_references()
 
         if endpoints_as_tools:
-            self._parse_swagger_to_tools()
+            self._convert_endpoints_to_tools()
             tool_handler = self.handle_call_tool
             self.instructions = (
                 "This MCP server provides access to a croit Ceph cluster."
@@ -92,7 +102,7 @@ Many endpoints offer pagination. When available, use it to refine the query.
         self.server.call_tool()(tool_handler)
 
     def _load_config(self):
-        """Load configuration from environment or file"""
+        """Load croit API configuration from environment or file, i.e. the target host and the API token."""
         self.host = os.environ.get("CROIT_HOST")
         self.api_token = os.environ.get("CROIT_API_TOKEN")
 
@@ -113,7 +123,7 @@ Many endpoints offer pagination. When available, use it to refine the query.
         self.ssl = self.host.startswith("https")
 
     def _fetch_swagger_spec(self):
-        """Fetch swagger.json from croit.io host"""
+        """Fetch swagger.json from the croit cluster and store it in self.api_spec."""
         swagger_url = f"{self.host}/api/swagger.json"
         headers = {
             "Authorization": f"Bearer {self.api_token}",
@@ -128,7 +138,11 @@ Many endpoints offer pagination. When available, use it to refine the query.
             logger.error(f"Failed to fetch swagger spec: {resp.status} - {resp.text()}")
 
     def _resolve_reference_schema(self, ref_path: str) -> Dict:
-        """Rsesolve a $ref reference in the swagger specification."""
+        """
+        Resolve a $ref reference in the swagger specification.
+        E.g. if ref_path is #/components/schemas/ManagedTask, this will return the ManagedTask schema
+        as defined in self.api_spec.
+        """
         logger.debug(f"Resolving {ref_path}")
         path = ref_path
         if path.startswith("#"):
@@ -142,10 +156,14 @@ Many endpoints offer pagination. When available, use it to refine the query.
         return current
 
     def _resolve_swagger_references(self):
-        """Recursively resolve all $ref references in the swagger specification."""
+        """
+        Recursively resolve all $ref references in the swagger specification.
+        Some LLMs can't deal with $ref, so each $ref gets replaced with its actual definition.
+        The drawback is that this will blow up the API spec.
+        """
 
-        # To fix the recursion in our PaginationRequest, we add it via $defs.
-        # See https://www.stainless.com/blog/lessons-from-openapi-to-mcp-server-conversion
+        # To fix the recursion in our PaginationRequest, we let it be a simple string,
+        # and instead instruct the LLM to generate JSON encoded in the string.
         pagination_ref = "#/components/schemas/PaginationRequest"
         pagination_schema = {
             "type": "string",
@@ -183,7 +201,7 @@ Valid filter ops are:
             root_spec,
             resolved: Dict[str, bool],
         ) -> Optional[Dict]:
-            """Recursively resolve references in an object"""
+            """Helper function for recursion"""
             if isinstance(obj, dict):
                 # Check if this dict is a reference
                 if "$ref" in obj and len(obj) == 1:
@@ -228,8 +246,13 @@ Valid filter ops are:
         )
         self.resolved_references = True
 
-    def _parse_swagger_to_tools(self):
-        """Convert Swagger paths to MCP tools"""
+    def _convert_endpoints_to_tools(self):
+        """
+        Turn each endpoint in self.api_spec into a MCP tool.
+        Will populate self.tools with a map of tool name to the tool information for each endpoint,
+        and self.mcp_tools with a list of all tools.
+        Meaning both will contain as many elements as there are API endpoints (plus some extra non-API tools).
+        """
 
         self.tools = {}
         paths = self.api_spec.get("paths", {})
@@ -316,7 +339,10 @@ Valid filter ops are:
             )
 
     def _build_parameters_schema(self, operation: Dict) -> ToolParameters:
-        """Extract input parameters for tools from OpenAPI spec"""
+        """
+        Given the OpenAPI spec of a single endpoint (including HTTP method), this will generate the ToolParameters.
+        The ToolParameters describe the input schema for the tool, i.e. what request body and what path and query parameters are expected.
+        """
         schema = {"type": "object", "properties": {}, "required": []}
         path_params: List[str] = []
         query_params: Dict[str, QueryParamInfo] = {}
@@ -362,7 +388,10 @@ Valid filter ops are:
         )
 
     def _build_response_schema(self, operation: Dict) -> Optional[Dict]:
-        """Build JSON schema for operation response"""
+        """
+        Same as _build_parameters_schema, but for the response.
+        We additionally wrap the response in our own object, that also includes the HTTP return code and error information.
+        """
 
         schema = {
             "type": "object",
@@ -393,7 +422,11 @@ Valid filter ops are:
         return schema
 
     def _convert_openapi_schema_to_json_schema(self, openapi_schema: Dict) -> Dict:
-        """Convert OpenAPI schema to JSON schema format"""
+        """
+        Convert OpenAPI schema to JSON schema format.
+        MCP expects JSON schema. OpenAPI schema is a superset of JSON schema and the MCP schema tends to not fully support JSON schemas,
+        so this function is used to make sure MCP can work with the schema.
+        """
         # https://spec.openapis.org/oas/v3.1.0.html#schema-object
         # The Schema Object format from OpenAPI is a superset JSON schema.
         # It doesn't add a lot, so we just use it directly and hope it works.
@@ -404,8 +437,13 @@ Valid filter ops are:
         return schema
 
     def _prepare_api_tools(self):
-        """Convert Swagger paths to MCP tools"""
+        """
+        Prepare the MCP tools to list the API, resolve references to schemas, and call the API.
+        This will populate self.mcp_tools with these tools, but ignore self.tools, as there are no dynamically generated tools here.
+        This is only called when not generating a tool per endpoint. The LLM is expected to list the endpoints instead via a tool.
+        """
 
+        # These 3 variables just store the names of the tools, they are used later when the LLM wants to use the tools.
         self.get_apis_tool = "list_api_endpoints"
         self.resolve_references_tool = "get_reference_schema"
         self.call_api_tool = "call_api_endpoint"
@@ -480,7 +518,7 @@ Valid filter ops are:
         ]
 
     async def handle_list_tools(self) -> List[types.Tool]:
-        """Return available tools based on Swagger spec"""
+        """Return available tools."""
         logger.info(f"Providing {len(self.mcp_tools)} tools")
         return self.mcp_tools
 
@@ -489,7 +527,10 @@ Valid filter ops are:
         name: str,
         arguments: Dict,
     ) -> dict[str, Any]:
-        """Execute API call based on tool name and arguments"""
+        """
+        Execute API call based on tool name and arguments.
+        Each tool is mapped to a specific API endpoint.
+        """
         logger.info(f"Tool call {name} with args {arguments}")
         if name == self.resolve_references_tool:
             resolved = self._resolve_reference_schema(
@@ -527,6 +568,10 @@ Valid filter ops are:
         method: str,
         kwargs: Dict,
     ) -> dict[str, Any]:
+        """
+        Helper function to make the actual API call.
+        This function is async, make sure to call it with await before returning the result.
+        """
         logger.info(f"Calling {method} {url}")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"kwargs: {json.dumps(kwargs, indent=2)}")
@@ -560,7 +605,7 @@ Valid filter ops are:
             return schema_response
 
     def _make_request_url(self, tool: CroitToolInfo, arguments: Dict) -> str:
-        """Construct the URL from the arguments provided by the LLM"""
+        """Construct the URL from the arguments (i.e. path parameters) provided by the LLM."""
         url = f"{self.host}/api{tool.path}"
 
         for key, value in arguments.items():
@@ -569,7 +614,7 @@ Valid filter ops are:
         return url
 
     def _make_query_params(self, tool: CroitToolInfo, arguments: Dict) -> str:
-        """Construct a query parameter dict from the arguments provided by the LLM"""
+        """Construct a query parameter dict from the arguments provided by the LLM."""
         params = {}
         for key, value in arguments.items():
             if key == "body" or key not in tool.query_params:
@@ -594,7 +639,10 @@ Valid filter ops are:
         name: str,
         arguments: Dict,
     ) -> dict[str, Any]:
-        """Handle the tools to let the LLM inspect and call the croit API directly"""
+        """
+        Handle the tools to let the LLM inspect and call the croit API directly.
+        This is the handler when we don't map each endpoint to a tool, but only offer a few tools to list and call the API directly.
+        """
         logger.info(f"Tool call {name}")
         if name == self.resolve_references_tool:
             resolved = self._resolve_reference_schema(
@@ -641,7 +689,7 @@ Valid filter ops are:
         return await self._make_api_call(url=url, method=method, kwargs=kwargs)
 
     async def run(self):
-        """Run the MCP server"""
+        """Run the MCP server."""
         async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
             await self.server.run(
                 read_stream,
@@ -658,7 +706,7 @@ Valid filter ops are:
             )
 
     async def cleanup(self):
-        """Cleanup resources"""
+        """Cleanup resources."""
         if self.session:
             await self.session.close()
 
