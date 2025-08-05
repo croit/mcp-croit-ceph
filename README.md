@@ -48,3 +48,15 @@ Add to `~/.config/claude/config.json`:
 - `CROIT_HOST` - croit cluster URL (required)
 - `CROIT_API_TOKEN` - API authentication token (required)
 
+## Developement
+
+Use VS Code/Cursor with the [Black Formatter](https://marketplace.visualstudio.com/items?itemName=ms-python.black-formatter)
+plugin installed.
+
+Set up a venv and use let your IDE use it:
+
+```bash
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+```
