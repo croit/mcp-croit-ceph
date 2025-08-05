@@ -1,7 +1,7 @@
 FROM python:3.13-slim
 
 # Install dependencies
-RUN pip install --no-cache-dir mcp aiohttp
+RUN pip install --no-cache-dir mcp aiohttp requests
 
 # Create app directory
 WORKDIR /app
