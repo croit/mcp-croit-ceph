@@ -7,6 +7,7 @@ Dynamically loads swagger.json from croit.io host and generates tools
 from dataclasses import dataclass
 import os
 import json
+import argparse
 import asyncio
 import logging
 import requests
@@ -48,22 +49,42 @@ class ToolParameters:
 
 
 class CroitCephServer:
-    def __init__(self, resolve_references=True):
+    def __init__(self, endpoints_as_tools=False, resolve_references=True, offer_whole_spec=False):
         self.tools: Dict[str, CroitToolInfo] = {}
         self.mcp_tools: List[types.Tool] = []
         self.api_spec = None
         self.host = None
         self.resolved_references = False
         self._load_config()
-        self._fetch_swagger_spec(resolve_references=resolve_references)
+        self._fetch_swagger_spec()
         self.session = aiohttp.ClientSession()
+
+        if resolve_references:
+            self._resolve_swagger_references()
+
+        if endpoints_as_tools:
+            self._parse_swagger_to_tools()
+            tool_handler = self.handle_call_tool
+            self.instructions = (
+                "This MCP server provides access to a croit Ceph cluster."
+            )
+        else:
+            self.offer_whole_spec = offer_whole_spec
+            self._prepare_api_tools()
+            tool_handler = self.handle_api_call_tool
+            self.instructions = """This MCP server provides access to a croit Ceph cluster.
+Use list_api_endpoints to get an overview of what endpoints are available.
+Use get_reference_schema to get more info on the schema for endpoints.
+Use call_api_endpoint to then call one of the endpoints.
+Many endpoints offer pagination. When available, use it to refine the query.
+                    """
 
         self.server = Server("mcp-croit-ceph")
         # These functions create decorators to register the handlers.
         # We then call the decorator with our functions.
         # We can't use the decorators directly because of self.
         self.server.list_tools()(self.handle_list_tools)
-        self.server.call_tool()(self.handle_call_tool)
+        self.server.call_tool()(tool_handler)
 
     def _load_config(self):
         """Load configuration from environment or file"""
@@ -86,7 +107,7 @@ class CroitCephServer:
         self.host = self.host.rstrip("/")
         self.ssl = self.host.startswith("https")
 
-    def _fetch_swagger_spec(self, resolve_references=False):
+    def _fetch_swagger_spec(self):
         """Fetch swagger.json from croit.io host"""
         swagger_url = f"{self.host}/api/swagger.json"
         headers = {
@@ -98,9 +119,6 @@ class CroitCephServer:
         resp = requests.get(swagger_url, headers=headers, verify=self.ssl)
         if resp.status_code == 200:
             self.api_spec = resp.json()
-            if resolve_references:
-                self._resolve_swagger_references()
-            self._parse_swagger_to_tools()
         else:
             logger.error(f"Failed to fetch swagger spec: {resp.status} - {resp.text()}")
 
@@ -380,6 +398,82 @@ Valid filter ops are:
             schema["description"] = openapi_schema.get("description", "")
         return schema
 
+    def _prepare_api_tools(self):
+        """Convert Swagger paths to MCP tools"""
+
+        self.get_apis_tool = "list_api_endpoints"
+        self.resolve_references_tool = "get_reference_schema"
+        self.call_api_tool = "call_api_endpoint"
+        self.mcp_tools = [
+            types.Tool(
+                name=self.get_apis_tool,
+                description="Lists available croit cluster API endpoints in the OpenAPI schema format. "
+                + "These can then be called with call_api_endpoint. Some offer pagination, use it when available.",
+                inputSchema={"type": "object", "properties": {}},
+            ),
+            types.Tool(
+                name=self.resolve_references_tool,
+                description="Resolves $ref schemas. This tool should be called whenever $ref is encountered to get the actual schema.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "reference_path": {
+                            "type": "string",
+                            "description": 'The reference string, e.g. "#/components/schemas/PaginationRequest"',
+                        }
+                    },
+                    "required": ["reference_path"],
+                },
+                outputSchema={
+                    "type": "object",
+                    "description": "The resolved reference schema.",
+                },
+            ),
+            types.Tool(
+                name=self.call_api_tool,
+                description="Calls the provided API endpoint and returns its response.",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "endpoint": {
+                            "type": "string",
+                            "description": "The endpoint as provided by list_api_endpoints, with path parameters already filled in.",
+                        },
+                        "method": {
+                            "type": "string",
+                            "description": "The HTTP method to use, e.g. get, post, etc.",
+                        },
+                        "body": {
+                            "type": "string",
+                            "description": "Request body (only if the endpoint expects a body).",
+                        },
+                        "queryParams": {
+                            "type": "array",
+                            "description": "List of query parameters to send with the request.",
+                            "items": {
+                                "type": "object",
+                                "description": "A single query parameter.",
+                                "properties": {
+                                    "name": {
+                                        "type": "string",
+                                        "description": "Name of the parameter.",
+                                    },
+                                    "value": {
+                                        "description": "Value of the parameter, may be a simple string, but can also be a JSON object.",
+                                    },
+                                },
+                            },
+                        },
+                    },
+                    "required": ["endpoint"],
+                },
+                outputSchema={
+                    "type": "object",
+                    "description": "The resolved reference schema.",
+                },
+            ),
+        ]
+
     async def handle_list_tools(self) -> List[types.Tool]:
         """Return available tools based on Swagger spec"""
         logger.info(f"Providing {len(self.mcp_tools)} tools")
@@ -414,18 +508,25 @@ Valid filter ops are:
             headers["Content-Type"] = "application/json"
             body = arguments["body"]
 
-        logger.info(f"Calling {tool.method.upper()} {url}")
-        if body:
-            logger.debug(f"Request body: {json.dumps(body, indent=2)}")
-
         kwargs = {"headers": headers, "ssl": self.ssl}
         if query_params:
             kwargs["params"] = query_params
         if tool.expects_body:
             kwargs["json"] = body
 
+        return await self._make_api_call(url=url, method=tool.method, kwargs=kwargs)
+
+    async def _make_api_call(
+        self,
+        url: str,
+        method: str,
+        kwargs: Dict,
+    ) -> dict[str, Any]:
+        logger.info(f"Calling {method} {url}")
+        if logger.isEnabledFor(logging.DEBUG):
+            logger.debug(f"kwargs: {json.dumps(kwargs, indent=2)}")
         try:
-            async with self.session.request(tool.method.upper(), url, **kwargs) as resp:
+            async with self.session.request(method.upper(), url, **kwargs) as resp:
                 response_text = await resp.text()
                 try:
                     response_data = json.loads(response_text) if response_text else None
@@ -448,7 +549,6 @@ Valid filter ops are:
                     )
 
                 return schema_response
-
         except Exception as e:
             logger.error(f"Request error: {e}")
             schema_response = {"code": 500, "error": f"Request failed: {str(e)}"}
@@ -484,6 +584,57 @@ Valid filter ops are:
                 params[key] = value
         return params
 
+    async def handle_api_call_tool(
+        self,
+        name: str,
+        arguments: Dict,
+    ) -> dict[str, Any]:
+        """Handle the tools to let the LLM inspect and call the croit API directly"""
+        logger.info(f"Tool call {name}")
+        if name == self.resolve_references_tool:
+            resolved = self._resolve_reference_schema(
+                ref_path=arguments["reference_path"]
+            )
+            return resolved
+        if name == self.get_apis_tool:
+            if self.offer_whole_spec:
+                return self.api_spec
+            return self.api_spec.get("paths", {})
+        if name != self.call_api_tool:
+            raise RuntimeError(f"Tool {name} not found")
+
+        # Rest of the code is the tool for call_api_tool.
+        endpoint = arguments["endpoint"]
+        if not endpoint.startswith("/"):
+            endpoint = "/" + endpoint
+        url = f"{self.host}/api{endpoint}"
+        method = arguments["method"]
+
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Accept": "application/json",
+            "Content-Type": "application/json",
+        }
+        body = None
+        if "body" in arguments:
+            body = arguments["body"]
+
+        query_params = None
+        if "queryParams" in arguments:
+            query_params = {}
+            for param in arguments["queryParams"]:
+                value = param["value"]
+                if isinstance(value, dict):
+                    value = json.dumps(value)
+                query_params[param["name"]] = value
+
+        kwargs = {"headers": headers, "ssl": self.ssl}
+        if query_params is not None:
+            kwargs["params"] = query_params
+        if body is not None:
+            kwargs["json"] = body
+        return await self._make_api_call(url=url, method=method, kwargs=kwargs)
+
     async def run(self):
         """Run the MCP server"""
         async with mcp.server.stdio.stdio_server() as (read_stream, write_stream):
@@ -497,7 +648,7 @@ Valid filter ops are:
                         notification_options=NotificationOptions(),
                         experimental_capabilities={},
                     ),
-                    instructions="This MCP server provides access to a croit Ceph cluster.",
+                    instructions=self.instructions,
                 ),
             )
 
@@ -508,7 +659,29 @@ Valid filter ops are:
 
 
 async def main():
-    server = CroitCephServer()
+    parser = argparse.ArgumentParser()
+    parser.add_argument(
+        "--endpoints-as-tools",
+        action="store_true",
+        help="Map each API endpoint to a separate MCP tool.",
+    )
+    parser.add_argument(
+        "--no-resolve-references",
+        action="store_false",
+        help="Don't resolve $refs in the API spec. Depending on the MCP client, resolving references may be required.",
+    )
+    parser.add_argument(
+        "--offer-whole-spec",
+        action="store_true",
+        help="Offer the entire API spec in the list_api_endpoints tool. Ignored when setting --endpoints-as-tools.",
+    )
+    args = parser.parse_args()
+
+    server = CroitCephServer(
+        endpoints_as_tools=args.endpoints_as_tools,
+        resolve_references=not args.no_resolve_references,
+        offer_whole_spec=args.offer_whole_spec,
+    )
     try:
         await server.run()
     finally:

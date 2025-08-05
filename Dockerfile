@@ -14,5 +14,6 @@ RUN chmod +x /app/mcp-croit-ceph.py
 RUN useradd -m -u 1000 mcp
 USER mcp
 
+ENV MCP_ARGS=""
 # Entry point
-ENTRYPOINT ["python", "/app/mcp-croit-ceph.py"]
+ENTRYPOINT ["bash", "-c", "python /app/mcp-croit-ceph.py $MCP_ARGS"]
