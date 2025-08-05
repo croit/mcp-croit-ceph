@@ -124,37 +124,36 @@ class CroitCephServer:
         # To fix the recursion in our PaginationRequest, we add it via $defs.
         # See https://www.stainless.com/blog/lessons-from-openapi-to-mcp-server-conversion
         pagination_ref = "#/components/schemas/PaginationRequest"
-        pagination_schema = self._resolve_reference_schema(ref_path=pagination_ref)
-        self.pagination_defs = {}
-
-        def resolve_pagination(obj, root_spec) -> Dict:
-            if isinstance(obj, dict):
-                if "$ref" in obj and len(obj) == 1:
-                    ref_path = obj["$ref"]
-                    name = ref_path.split("/")[-1]
-                    if name not in self.pagination_defs:
-                        resolved_path = self._resolve_reference_schema(
-                            ref_path=ref_path
-                        )
-                        # Needed to prevent endless recursion
-                        self.pagination_defs[name] = resolved_path
-                        self.pagination_defs[name] = resolve_pagination(resolved_path, root_spec)
-                    return {"$ref": f"#/$defs/{name}"}
-                else:
-                    resolved_paths = {}
-                    for key, value in obj.items():
-                        resolved_paths[key] = resolve_pagination(value, root_spec)
-                    return resolved_paths
-            elif isinstance(obj, list):
-                return [resolve_pagination(item, root_spec) for item in obj]
-            else:
-                return obj
-
-        pagination_schema = resolve_pagination(
-            pagination_schema, root_spec=self.api_spec
-        )
-        self.pagination_defs["Pagination"] = pagination_schema
-        logger.info(f"Pagination schema: {json.dumps(pagination_schema)}")
+        pagination_schema = {
+            "type": "string",
+            "description": """
+Pagination is JSON encoded in a string.
+The JSON (optionally) contains the fields "after", "limit", "where" and "sortBy".
+"after" and "limit" are both integers, specifying the offset in the all the data and the limit for this page.
+"sortBy" is a list of JSON objects. Each object looks like this: {"column": "...", "order": "ASC"}.
+"column" is the field to sort by, "order" is either "ASC" or "DESC".
+"where" is also a list of JSON objects. Each object has a oepration as key: {"<operation>": <object>}.
+Operations are:
+- "_and", <object> then is a list of "where" objects to AND together.
+- "_or", <object> then is a list of "where" objects to OR together.
+- "_not", <object> then is a single "where" object whose condition is inverted.
+- "_search", <object> is a string to do full-text search with.
+Alternatively, instead of an operation a where object can look like this: {"<field name>": <field condition object>}.
+In this case, a filter will be applied to filter fields based on the given condition.
+The field condition object looks like this: {"<filter op>": <filter value>}
+Valid filter ops are:
+- "_eq", the field value needs to be equal the filter value
+- "_neq", not equal
+- "_gt", greater than
+- "_gte", greater than or equals
+- "_lt", less than
+- "_lte", less than or equals
+- "_regex", matches regex (filter value is a regex)
+- "_in", in the filter value as element of a list or substring of a string
+- "_nin", not in
+- "_contains", field contains the filter value
+            """,
+        }
 
         def resolve_references(
             obj,
@@ -168,7 +167,7 @@ class CroitCephServer:
                     # This is a pure reference - resolve it
                     ref_path = obj["$ref"]
                     if ref_path == pagination_ref:
-                        return {"$ref": "#/$defs/Pagination"}
+                        return pagination_schema
                     if ref_path in resolved:
                         # The only recursion we really have is with Pagination/WhereCondition.
                         # We already handle that case though.
@@ -298,10 +297,6 @@ class CroitCephServer:
         schema = {"type": "object", "properties": {}, "required": []}
         path_params: List[str] = []
         query_params: Dict[str, QueryParamInfo] = {}
-
-        # We inject our Pagination definition at the top of all tools.
-        if self.resolved_references:
-            schema["$defs"] = self.pagination_defs
 
         # Path and query parameters, see https://spec.openapis.org/oas/v3.1.0.html#parameter-object
         for param in operation.get("parameters", []):
