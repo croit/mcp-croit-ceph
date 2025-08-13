@@ -487,7 +487,7 @@ Valid filter ops are:
                             "description": "The HTTP method to use, e.g. get, post, etc.",
                         },
                         "body": {
-                            "type": "string",
+                            "type": "object",
                             "description": "Request body (only if the endpoint expects a body).",
                         },
                         "queryParams": {
