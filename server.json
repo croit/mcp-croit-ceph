@@ -1,0 +1,54 @@
+{
+  "$schema": "https://registry.modelcontextprotocol.org/server.schema.json",
+  "name": "io.github.croit/mcp-croit-ceph",
+  "description": "MCP server for Croit Ceph cluster management - dynamically generates tools from Croit OpenAPI specifications",
+  "version": "0.2.0",
+  "author": {
+    "name": "Croit",
+    "url": "https://github.com/croit"
+  },
+  "license": "MIT",
+  "homepage": "https://github.com/croit/mcp-croit-ceph",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/croit/mcp-croit-ceph.git"
+  },
+  "tags": ["ceph", "storage", "cluster-management", "croit", "openapi"],
+  "deployment": {
+    "type": "package",
+    "package": {
+      "type": "docker",
+      "registry": "ghcr.io",
+      "namespace": "croit",
+      "name": "mcp-croit-ceph"
+    },
+    "instructions": [
+      {
+        "type": "docker",
+        "content": "docker run --rm -i -e CROIT_HOST=http://your-cluster.croit.io:8080 -e CROIT_API_TOKEN=your-token ghcr.io/croit/mcp-croit-ceph:latest"
+      }
+    ],
+    "config": {
+      "env": {
+        "CROIT_HOST": {
+          "required": true,
+          "description": "Croit cluster URL (e.g., http://your-cluster.croit.io:8080)"
+        },
+        "CROIT_API_TOKEN": {
+          "required": true,
+          "description": "API authentication token for Croit cluster"
+        }
+      }
+    }
+  },
+  "tools": [
+    {
+      "type": "dynamic",
+      "description": "Tools are dynamically generated from the Croit OpenAPI specification"
+    }
+  ],
+  "capabilities": {
+    "api": ["list", "read", "write", "delete"],
+    "resources": ["clusters", "nodes", "pools", "osds", "configurations"]
+  }
+}
