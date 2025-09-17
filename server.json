@@ -17,7 +17,7 @@
   "tags": ["ceph", "storage", "cluster-management", "croit", "openapi"],
   "packages": [
     {
-      "version": "0.2.7",
+      "version": "latest",
       "registry_type": "oci",
       "identifier": "croit/mcp-croit-ceph",
       "registry_base_url": "https://docker.io",
