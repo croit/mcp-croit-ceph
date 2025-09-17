@@ -12,6 +12,7 @@ jobs:
     permissions:
       id-token: write  # Required for OIDC
       contents: read
+      packages: read  # May be needed for org repos
 
     steps:
       - name: Checkout
@@ -36,8 +37,25 @@ jobs:
           curl -L "https://github.com/modelcontextprotocol/registry/releases/download/v1.0.0/mcp-publisher_1.0.0_$(uname -s | tr '[:upper:]' '[:lower:]')_$(uname -m | sed 's/x86_64/amd64/;s/aarch64/arm64/').tar.gz" | tar xz mcp-publisher
           chmod +x mcp-publisher
 
+      - name: Debug OIDC Token
+        run: |
+          echo "Repository: ${{ github.repository }}"
+          echo "Repository owner: ${{ github.repository_owner }}"
+          echo "Actor: ${{ github.actor }}"
+          echo "Workflow: ${{ github.workflow }}"
+
       - name: Login with OIDC
-        run: ./mcp-publisher login github-oidc
+        run: |
+          echo "Attempting OIDC login for repository: ${{ github.repository }}"
+          ./mcp-publisher login github-oidc
 
       - name: Publish to Registry
-        run: ./mcp-publisher publish --verbose
+        run: |
+          echo "Publishing server to MCP Registry..."
+          ./mcp-publisher publish --verbose || {
+            echo "===== Debugging failed publish ====="
+            echo "Server name in server.json:"
+            grep '"name"' server.json | head -1
+            echo "Expected pattern: io.github.${{ github.repository_owner }}/*"
+            exit 1
+          }
