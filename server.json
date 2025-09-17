@@ -10,44 +10,33 @@
   "license": "MIT",
   "homepage": "https://github.com/croit/mcp-croit-ceph",
   "repository": {
-    "url": "https://github.com/croit/mcp-croit-ceph"
+    "url": "https://github.com/croit/mcp-croit-ceph",
+    "source": "github",
+    "id": "1058156155"
   },
   "tags": ["ceph", "storage", "cluster-management", "croit", "openapi"],
-  "deployment": {
-    "type": "package",
-    "package": {
-      "type": "docker",
-      "registry": "ghcr.io",
-      "namespace": "croit",
-      "name": "mcp-croit-ceph"
-    },
-    "instructions": [
-      {
-        "type": "docker",
-        "content": "docker run --rm -i -e CROIT_HOST=http://your-cluster.croit.io:8080 -e CROIT_API_TOKEN=your-token ghcr.io/croit/mcp-croit-ceph:latest"
-      }
-    ],
-    "config": {
-      "env": {
-        "CROIT_HOST": {
-          "required": true,
-          "description": "Croit cluster URL (e.g., http://your-cluster.croit.io:8080)"
-        },
-        "CROIT_API_TOKEN": {
-          "required": true,
-          "description": "API authentication token for Croit cluster"
-        }
-      }
-    }
-  },
-  "tools": [
+  "packages": [
     {
-      "type": "dynamic",
-      "description": "Tools are dynamically generated from the Croit OpenAPI specification"
+      "version": "0.2.7",
+      "registry_type": "oci",
+      "identifier": "croit/mcp-croit-ceph",
+      "registry_base_url": "https://docker.io",
+      "transport": {
+        "type": "stdio"
+      },
+      "environment_variables": [
+        {
+          "name": "CROIT_HOST",
+          "description": "Croit cluster URL (e.g., http://your-cluster.croit.io:8080)",
+          "required": true
+        },
+        {
+          "name": "CROIT_API_TOKEN",
+          "description": "API authentication token for Croit cluster",
+          "required": true
+        }
+      ]
     }
   ],
-  "capabilities": {
-    "api": ["list", "read", "write", "delete"],
-    "resources": ["clusters", "nodes", "pools", "osds", "configurations"]
-  }
+  "status": "active"
 }
