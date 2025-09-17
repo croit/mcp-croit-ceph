@@ -28,7 +28,7 @@ To enable Docker Hub pushing and MCP Registry publishing, configure these variab
 
 ## Version Management
 
-The version `0.2.9` is defined in:
+The version `0.2.13` is defined in:
 - `.gitlab-ci.yml` (MCP_VERSION variable)
 - `server.json` (packages[0].version field)
 
@@ -45,6 +45,6 @@ To manually trigger the MCP Registry publishing:
 ## Docker Hub Image
 
 The image is published to Docker Hub as:
-- `croit/mcp-croit-ceph:0.2.9` (version tag)
+- `croit/mcp-croit-ceph:0.2.13` (version tag)
 - `croit/mcp-croit-ceph:latest` (latest tag)
 - `croit/mcp-croit-ceph:<git-tag>` (when pushing git tags)

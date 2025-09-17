@@ -2,7 +2,7 @@ variables:
   DOCKER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
   DOCKERHUB_IMAGE: croit/mcp-croit-ceph
   # Version should match server.json
-  MCP_VERSION: "0.2.9"
+  MCP_VERSION: "0.2.13"
 
 .docker-image:
   tags:
