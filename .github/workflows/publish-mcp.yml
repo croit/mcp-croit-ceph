@@ -57,12 +57,23 @@ jobs:
           chmod +x mcp-publisher
           ./mcp-publisher --version
 
+      - name: Verify server.json exists
+        run: |
+          if [ ! -f "server.json" ]; then
+            echo "Error: server.json not found in repository root"
+            exit 1
+          fi
+          echo "Found server.json:"
+          cat server.json
+
       - name: Login to MCP Registry
         run: |
+          echo "Logging in to MCP Registry with GitHub OIDC..."
           ./mcp-publisher login github-oidc
 
       - name: Publish to MCP Registry
         run: |
-          ./mcp-publisher publish
+          echo "Publishing to MCP Registry..."
+          ./mcp-publisher publish --verbose
         env:
           MCP_PUBLISH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

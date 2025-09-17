@@ -1,7 +1,7 @@
 FROM python:3.13-slim
 
 # Add label for MCP registry validation
-LABEL org.modelcontextprotocol.server="io.github.croit/mcp-croit-ceph"
+LABEL org.modelcontextprotocol.server="@croit/mcp-croit-ceph"
 LABEL org.opencontainers.image.source="https://github.com/croit/mcp-croit-ceph"
 LABEL org.opencontainers.image.description="MCP server for Croit Ceph cluster management"
 LABEL org.opencontainers.image.licenses="MIT"
