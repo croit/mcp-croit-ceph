@@ -9,10 +9,7 @@
   },
   "license": "MIT",
   "homepage": "https://github.com/croit/mcp-croit-ceph",
-  "repository": {
-    "type": "git",
-    "url": "https://github.com/croit/mcp-croit-ceph"
-  },
+  "repository": "https://github.com/croit/mcp-croit-ceph",
   "tags": ["ceph", "storage", "cluster-management", "croit", "openapi"],
   "deployment": {
     "type": "package",
