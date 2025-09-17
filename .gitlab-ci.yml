@@ -1,5 +1,8 @@
 variables:
   DOCKER_IMAGE: $CI_REGISTRY_IMAGE:$CI_COMMIT_REF_NAME
+  DOCKERHUB_IMAGE: croit/mcp-croit-ceph
+  # Version should match server.json
+  MCP_VERSION: "0.2.0"
 
 .docker-image:
   tags:
@@ -11,6 +14,7 @@ variables:
 stages:
   - lint
   - build
+  - publish
 
 lint:python:
   stage: lint
@@ -25,7 +29,84 @@ build:mcp-croit-ceph:
   extends:
     - .docker-image
   script:
+    # Build image
     - docker build -t $DOCKER_IMAGE .
+
+    # Push to GitLab registry
     - docker push $DOCKER_IMAGE
+
+    # Also push to Docker Hub with proper tags
+    - |
+      if [ -n "$DOCKERHUB_USER" ] && [ -n "$DOCKERHUB_PASSWORD" ]; then
+        echo "Logging in to Docker Hub..."
+        docker login -u $DOCKERHUB_USER -p $DOCKERHUB_PASSWORD
+
+        # Tag and push with version
+        docker tag $DOCKER_IMAGE $DOCKERHUB_IMAGE:$MCP_VERSION
+        docker push $DOCKERHUB_IMAGE:$MCP_VERSION
+
+        # Also push as latest
+        docker tag $DOCKER_IMAGE $DOCKERHUB_IMAGE:latest
+        docker push $DOCKERHUB_IMAGE:latest
+
+        # If this is a tag, also use the tag name
+        if [ -n "$CI_COMMIT_TAG" ]; then
+          docker tag $DOCKER_IMAGE $DOCKERHUB_IMAGE:$CI_COMMIT_TAG
+          docker push $DOCKERHUB_IMAGE:$CI_COMMIT_TAG
+        fi
+      else
+        echo "Docker Hub credentials not configured, skipping Docker Hub push"
+      fi
   after_script:
     - docker rmi -f $DOCKER_IMAGE
+
+publish:mcp-registry:
+  stage: publish
+  image: ubuntu:latest
+  only:
+    # Only run on tags or manual trigger
+    - tags
+    - web
+  script:
+    - apt-get update && apt-get install -y curl ca-certificates
+
+    # Download MCP publisher
+    - |
+      curl -L "https://github.com/modelcontextprotocol/registry/releases/download/v1.0.0/mcp-publisher_1.0.0_linux_amd64.tar.gz" | tar xz mcp-publisher
+      chmod +x mcp-publisher
+      ./mcp-publisher --version
+
+    # Validate server.json exists
+    - |
+      if [ ! -f "server.json" ]; then
+        echo "Error: server.json not found"
+        exit 1
+      fi
+      echo "Found server.json:"
+      cat server.json
+
+    # Login to MCP Registry
+    # For GitLab CI, we need to use a different authentication method
+    # since github-oidc won't work from GitLab
+    - |
+      if [ -n "$MCP_GITHUB_TOKEN" ]; then
+        echo "Using GitHub token authentication..."
+        # The MCP publisher expects the token in a specific format
+        echo "$MCP_GITHUB_TOKEN" | ./mcp-publisher login github --token -
+      else
+        echo "Error: MCP_GITHUB_TOKEN not configured"
+        echo "Please set MCP_GITHUB_TOKEN as a CI/CD variable with a GitHub personal access token"
+        echo "The token needs 'public_repo' scope"
+        exit 1
+      fi
+
+    # Publish to MCP Registry
+    - |
+      echo "Publishing to MCP Registry..."
+      ./mcp-publisher publish --verbose
+  artifacts:
+    reports:
+      dotenv: publish.env
+    paths:
+      - publish.log
+    when: always
