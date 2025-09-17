@@ -109,17 +109,16 @@ publish:mcp-registry:
       cat server.json
 
     # Login to MCP Registry
-    # For GitLab CI, we need to use a different authentication method
-    # since github-oidc won't work from GitLab
+    # For GitLab CI, we need to use GitHub token authentication
     - |
       if [ -n "$MCP_GITHUB_TOKEN" ]; then
         echo "Using GitHub token authentication..."
-        # The MCP publisher expects the token in a specific format
-        echo "$MCP_GITHUB_TOKEN" | ./mcp-publisher login github --token -
+        export GITHUB_TOKEN="$MCP_GITHUB_TOKEN"
+        ./mcp-publisher login github
       else
         echo "Error: MCP_GITHUB_TOKEN not configured"
         echo "Please set MCP_GITHUB_TOKEN as a CI/CD variable with a GitHub personal access token"
-        echo "The token needs 'public_repo' scope"
+        echo "The token needs 'public_repo' scope for the croit organization"
         exit 1
       fi
 
