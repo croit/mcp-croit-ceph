@@ -1,6 +1,6 @@
 {
   "$schema": "https://registry.modelcontextprotocol.org/server.schema.json",
-  "name": "@croit/mcp-croit-ceph",
+  "name": "io.github.croit/mcp-croit-ceph",
   "description": "MCP server for Croit Ceph cluster management with dynamic OpenAPI tool generation",
   "version": "0.2.0",
   "author": {
