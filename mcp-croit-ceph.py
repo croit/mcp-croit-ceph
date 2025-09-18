@@ -51,16 +51,20 @@ class ToolParameters:
 class CroitCephServer:
     def __init__(
         self,
-        endpoints_as_tools=False,
+        mode="hybrid",  # New mode parameter: "hybrid", "base_only", "categories_only", "endpoints_as_tools"
         resolve_references=True,
         offer_whole_spec=False,
+        endpoints_as_tools=False,  # Kept for backwards compatibility
+        max_category_tools=10,  # Maximum number of category tools to generate
+        min_endpoints_per_category=5,  # Minimum endpoints needed for a category tool
+        openapi_file=None,  # Optional: Use local OpenAPI spec file instead of fetching from server
     ):
         # tools is a map of tool name (as given to and later provided by the LLM) to the tool info.
         # Each endpoint is represented in this map as a tool.
         # Only used if endpoints_as_tools is True, as we don't map endpoints otherwise.
         self.tools: Dict[str, CroitToolInfo] = {}
         # mcp_tools later contains the list of tools that will be advertised to the LLM.
-        # The exact list depends on endpoints_as_tools.
+        # The exact list depends on mode.
         self.mcp_tools: List[types.Tool] = []
         # api_spec contains the OpenAPI schema as returned from the cluster.
         self.api_spec = None
@@ -69,21 +73,56 @@ class CroitCephServer:
         # resolved_references will later be set to true when resolve_references is True.
         # Meaning if True, the spec won't contain any $ref references anymore.
         self.resolved_references = False
+        # Category mapping for hybrid mode
+        self.category_endpoints = {}
         # session is later used to make the actual API calls to the cluster.
         self.session = aiohttp.ClientSession()
+
+        # Handle backwards compatibility
+        if endpoints_as_tools:
+            mode = "endpoints_as_tools"
+        self.mode = mode
+        self.max_category_tools = max_category_tools
+        self.min_endpoints_per_category = min_endpoints_per_category
+        self.openapi_file = openapi_file
+
         self._load_config()
-        self._fetch_swagger_spec()
+        if openapi_file:
+            self._load_local_swagger_spec()
+        else:
+            self._fetch_swagger_spec()
 
         if resolve_references:
             self._resolve_swagger_references()
 
-        if endpoints_as_tools:
+        # Configure based on mode
+        if mode == "endpoints_as_tools":
             self._convert_endpoints_to_tools()
             tool_handler = self.handle_call_tool
             self.instructions = (
                 "This MCP server provides access to a croit Ceph cluster."
             )
-        else:
+        elif mode == "hybrid":
+            self.offer_whole_spec = offer_whole_spec
+            self._analyze_api_structure()
+            self._prepare_hybrid_tools()
+            tool_handler = self.handle_hybrid_tool
+            self.instructions = """This MCP server provides access to a croit Ceph cluster.
+
+Available tools:
+- list_endpoints: List API endpoints with filtering options
+- call_endpoint: Call any API endpoint directly
+- Category-specific tools for common operations (e.g., manage_services, manage_pools)
+
+Use category tools for common operations, or use list_endpoints/call_endpoint for any endpoint."""
+        elif mode == "categories_only":
+            self._analyze_api_structure()
+            self._prepare_category_tools_only()
+            tool_handler = self.handle_category_tool
+            self.instructions = """This MCP server provides access to a croit Ceph cluster.
+
+Category-based tools are available for common operations like managing services, pools, and storage."""
+        else:  # base_only (default fallback)
             self.offer_whole_spec = offer_whole_spec
             self._prepare_api_tools()
             tool_handler = self.handle_api_call_tool
@@ -121,6 +160,20 @@ Many endpoints offer pagination. When available, use it to refine the query.
         # Ensure host doesn't have trailing slash
         self.host = self.host.rstrip("/")
         self.ssl = self.host.startswith("https")
+
+    def _load_local_swagger_spec(self):
+        """Load OpenAPI spec from a local file."""
+        logger.info(f"Loading OpenAPI spec from local file: {self.openapi_file}")
+        try:
+            with open(self.openapi_file, 'r') as f:
+                self.api_spec = json.load(f)
+            logger.info(f"Successfully loaded OpenAPI spec from {self.openapi_file}")
+        except FileNotFoundError:
+            logger.error(f"OpenAPI spec file not found: {self.openapi_file}")
+            raise
+        except json.JSONDecodeError as e:
+            logger.error(f"Invalid JSON in OpenAPI spec file: {e}")
+            raise
 
     def _fetch_swagger_spec(self):
         """Fetch swagger.json from the croit cluster and store it in self.api_spec."""
@@ -436,6 +489,328 @@ Valid filter ops are:
             schema["description"] = openapi_schema.get("description", "")
         return schema
 
+    def _analyze_api_structure(self):
+        """
+        Analyze the OpenAPI spec to categorize endpoints by tags.
+        Populates self.category_endpoints with a mapping of categories to their endpoints.
+        """
+        from collections import Counter
+
+        tag_counter = Counter()
+        self.category_endpoints = {}
+
+        paths = self.api_spec.get("paths", {})
+        for path, methods in paths.items():
+            for method, operation in methods.items():
+                if method.lower() not in ["get", "post", "put", "delete", "patch"]:
+                    continue
+
+                if operation.get("deprecated", False):
+                    continue
+
+                tags = operation.get("tags", [])
+                for tag in tags:
+                    tag_counter[tag] += 1
+                    if tag not in self.category_endpoints:
+                        self.category_endpoints[tag] = []
+
+                    endpoint_info = {
+                        "path": path,
+                        "method": method.lower(),
+                        "operationId": operation.get("operationId", ""),
+                        "summary": operation.get("summary", ""),
+                        "description": operation.get("description", ""),
+                        "llm_hints": operation.get("x-llm-hints", {}),
+                    }
+                    self.category_endpoints[tag].append(endpoint_info)
+
+        # Sort categories by operation count and select top categories
+        potential_categories = [
+            cat for cat, count in tag_counter.most_common(self.max_category_tools * 2)  # Get more initially
+            if count >= self.min_endpoints_per_category
+        ]
+
+        # Test permissions for each category if enabled
+        if getattr(self, 'check_permissions', True):
+            self.top_categories = self._filter_categories_by_permission(potential_categories)
+        else:
+            self.top_categories = potential_categories[:self.max_category_tools]
+
+        logger.info(f"Found {len(tag_counter)} categories, selected {len(self.top_categories)} accessible: {self.top_categories}")
+
+    def _get_user_roles(self) -> List[str]:
+        """
+        Get user roles from /auth/token-info endpoint.
+        Returns list of roles. Raises exception if token is invalid.
+        """
+        import requests
+
+        try:
+            token_info_url = f"{self.host}/api/auth/token-info"
+            headers = {
+                "Authorization": f"Bearer {self.api_token}",
+                "Accept": "application/json",
+            }
+
+            resp = requests.get(token_info_url, headers=headers, verify=self.ssl, timeout=5)
+
+            if resp.status_code == 200:
+                data = resp.json()
+                roles = data.get("roles", [])
+                logger.info(f"User roles detected: {roles}")
+                return roles if roles else ["VIEWER"]  # Default to VIEWER if empty (shouldn't happen)
+            elif resp.status_code == 401:
+                logger.error("Invalid API token - authentication failed")
+                raise RuntimeError("Invalid API token. Please check your CROIT_API_TOKEN.")
+            else:
+                logger.error(f"Unexpected response from token-info: {resp.status_code}")
+                raise RuntimeError(f"Failed to verify API token: HTTP {resp.status_code}")
+
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to connect to Croit API: {e}")
+            raise RuntimeError(f"Cannot connect to Croit API at {self.host}: {e}")
+
+    def _filter_categories_by_permission(self, categories: List[str]) -> List[str]:
+        """
+        Filter categories based on user roles.
+        Returns only categories where the user has access based on their role.
+        Every valid API token has a role, so this should always work.
+        """
+        # Get user roles (will raise exception if token is invalid)
+        user_roles = self._get_user_roles()
+
+        # Check if user has admin role (full access)
+        has_admin = "ADMIN" in user_roles or "ADMINISTRATOR" in user_roles
+
+        if has_admin:
+            logger.info("User has ADMIN role - all categories accessible")
+            return categories[:self.max_category_tools]
+
+        # Categories that require ADMIN role for write operations
+        admin_only_categories = {
+            'maintenance',  # System maintenance operations
+            'servers',      # Server management
+            'ipmi',         # IPMI/hardware control
+            'config',       # Configuration changes
+            'hooks',        # System hooks
+            'change-requests',  # Change management
+            'config-templates', # Configuration templates
+        }
+
+        # For VIEWER/READ_ONLY users, filter out admin-only categories
+        logger.info(f"User has roles {user_roles} - filtering categories")
+
+        accessible_categories = []
+        for category in categories:
+            # Skip admin-only categories for non-admin users
+            if category in admin_only_categories:
+                logger.debug(f"Category '{category}' requires ADMIN role - skipping")
+                continue
+
+            # All other categories are accessible for read operations
+            accessible_categories.append(category)
+            logger.debug(f"Category '{category}' accessible for role {user_roles}")
+
+            # Stop when we have enough categories
+            if len(accessible_categories) >= self.max_category_tools:
+                break
+
+        return accessible_categories
+
+    def _prepare_hybrid_tools(self):
+        """
+        Prepare hybrid tools: base tools + category tools for top categories.
+        """
+        # Base tools
+        self.list_endpoints_tool = "list_endpoints"
+        self.call_endpoint_tool = "call_endpoint"
+        self.get_schema_tool = "get_schema"
+
+        # Base tool: list_endpoints with filtering
+        self.mcp_tools.append(types.Tool(
+            name=self.list_endpoints_tool,
+            description="List available API endpoints with filtering options",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "category": {
+                        "type": "string",
+                        "description": f"Filter by category/tag. Available: {', '.join(self.top_categories[:10])}"
+                    },
+                    "method": {
+                        "type": "string",
+                        "enum": ["get", "post", "put", "delete", "patch"],
+                        "description": "Filter by HTTP method"
+                    },
+                    "search": {
+                        "type": "string",
+                        "description": "Search term to filter endpoints by path or summary"
+                    }
+                }
+            }
+        ))
+
+        # Base tool: call_endpoint
+        self.mcp_tools.append(types.Tool(
+            name=self.call_endpoint_tool,
+            description="Call any API endpoint directly",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "path": {
+                        "type": "string",
+                        "description": "API endpoint path (e.g., /services/{id})"
+                    },
+                    "method": {
+                        "type": "string",
+                        "enum": ["get", "post", "put", "delete", "patch"],
+                        "description": "HTTP method"
+                    },
+                    "path_params": {
+                        "type": "object",
+                        "description": "Path parameters as key-value pairs"
+                    },
+                    "query_params": {
+                        "type": "object",
+                        "description": "Query parameters as key-value pairs"
+                    },
+                    "body": {
+                        "type": "object",
+                        "description": "Request body (for POST, PUT, PATCH)"
+                    }
+                },
+                "required": ["path", "method"]
+            }
+        ))
+
+        # Only add get_schema tool if references aren't resolved
+        if not self.resolved_references:
+            self.mcp_tools.append(types.Tool(
+                name=self.get_schema_tool,
+                description="Get schema definition for $ref references",
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "reference": {
+                            "type": "string",
+                            "description": "Schema reference (e.g., #/components/schemas/Service)"
+                        }
+                    },
+                    "required": ["reference"]
+                }
+            ))
+
+        # Generate category tools for top categories
+        for category in self.top_categories:
+            self._generate_category_tool(category)
+
+        logger.info(f"Generated {len(self.mcp_tools)} tools total (hybrid mode)")
+
+    def _generate_category_tool(self, category: str):
+        """
+        Generate a category-specific tool for a given tag/category.
+        """
+        endpoints = self.category_endpoints.get(category, [])
+        if not endpoints:
+            return
+
+        # Analyze available operations
+        methods = set(ep["method"] for ep in endpoints)
+        has_list = any(ep["method"] == "get" and "{" not in ep["path"] for ep in endpoints)
+        has_get = any(ep["method"] == "get" and "{" in ep["path"] for ep in endpoints)
+        has_create = "post" in methods
+        has_update = "put" in methods or "patch" in methods
+        has_delete = "delete" in methods
+
+        # Build actions list
+        actions = []
+        if has_list:
+            actions.append("list")
+        if has_get:
+            actions.append("get")
+        if has_create:
+            actions.append("create")
+        if has_update:
+            actions.append("update")
+        if has_delete:
+            actions.append("delete")
+
+        tool_name = f"manage_{category.replace('-', '_')}"
+        description = f"Manage {category} resources. Available actions: {', '.join(actions)}"
+
+        # Extract key LLM hints for tool description
+        # Prioritize purpose and usage as they're most helpful for tool discovery
+        hint_purposes = []
+        hint_usages = []
+        has_confirmations = False
+
+        for ep in endpoints[:5]:  # Sample first 5 endpoints for hints
+            hints = ep.get("llm_hints", {})
+            if hints:
+                # Collect purposes and usages for the description
+                if hints.get("purpose") and len(hint_purposes) < 2:
+                    hint_purposes.append(hints["purpose"][:100])
+                if hints.get("usage") and len(hint_usages) < 3:
+                    for usage in hints["usage"][:2]:
+                        if len(hint_usages) < 3:
+                            hint_usages.append(usage[:80])
+                if hints.get("requires_confirmation"):
+                    has_confirmations = True
+
+        # Build enhanced description with hints
+        if hint_purposes:
+            description += f". Purpose: {hint_purposes[0]}"
+        if hint_usages:
+            description += f". Common usage: {hint_usages[0]}"
+        if has_confirmations:
+            description += ". Note: Some operations require confirmation"
+
+        # Add examples from endpoint summaries
+        example_ops = endpoints[:3]
+        if example_ops:
+            examples = [f"{ep['method'].upper()} {ep['path']}: {ep['summary']}" for ep in example_ops if ep['summary']]
+            if examples:
+                description += f". Examples: {'; '.join(examples[:2])}"
+
+        input_schema = {
+            "type": "object",
+            "properties": {
+                "action": {
+                    "type": "string",
+                    "enum": actions,
+                    "description": f"Action to perform on {category}"
+                },
+                "resource_id": {
+                    "type": "string",
+                    "description": f"ID of the {category} resource (for get, update, delete)"
+                },
+                "filters": {
+                    "type": "object",
+                    "description": "Filters for list action (query parameters)"
+                },
+                "data": {
+                    "type": "object",
+                    "description": "Data for create or update actions"
+                }
+            },
+            "required": ["action"]
+        }
+
+        self.mcp_tools.append(types.Tool(
+            name=tool_name,
+            description=description[:500],  # Limit description length
+            inputSchema=input_schema
+        ))
+
+    def _prepare_category_tools_only(self):
+        """
+        Prepare only category-based tools (no base tools).
+        """
+        for category in self.top_categories:
+            self._generate_category_tool(category)
+
+        logger.info(f"Generated {len(self.mcp_tools)} category tools (categories_only mode)")
+
     def _prepare_api_tools(self):
         """
         Prepare the MCP tools to list the API, resolve references to schemas, and call the API.
@@ -705,6 +1080,221 @@ Valid filter ops are:
                 ),
             )
 
+    async def handle_hybrid_tool(
+        self,
+        name: str,
+        arguments: Dict,
+    ) -> dict[str, Any]:
+        """
+        Handle hybrid mode tools: base tools and category tools.
+        """
+        logger.info(f"Hybrid tool call: {name} with args {arguments}")
+
+        # Handle base tools
+        if name == self.list_endpoints_tool:
+            return self._list_endpoints_filtered(arguments)
+
+        if name == self.call_endpoint_tool:
+            return await self._call_endpoint_direct(arguments)
+
+        if hasattr(self, 'get_schema_tool') and name == self.get_schema_tool:
+            return self._resolve_reference_schema(ref_path=arguments["reference"])
+
+        # Handle category tools
+        if name.startswith("manage_"):
+            return await self._handle_category_tool(name, arguments)
+
+        raise RuntimeError(f"Unknown tool: {name}")
+
+    async def handle_category_tool(
+        self,
+        name: str,
+        arguments: Dict,
+    ) -> dict[str, Any]:
+        """
+        Handle category-only mode tools.
+        """
+        logger.info(f"Category tool call: {name} with args {arguments}")
+
+        if name.startswith("manage_"):
+            return await self._handle_category_tool(name, arguments)
+
+        raise RuntimeError(f"Unknown tool: {name}")
+
+    async def _handle_category_tool(
+        self,
+        name: str,
+        arguments: Dict,
+    ) -> dict[str, Any]:
+        """
+        Handle a category-specific tool call.
+        Maps the action to the appropriate endpoint and makes the API call.
+        """
+        # Extract category from tool name (manage_services -> services)
+        category = name.replace("manage_", "").replace("_", "-")
+
+        if category not in self.category_endpoints:
+            return {"error": f"Category {category} not found"}
+
+        action = arguments.get("action")
+        resource_id = arguments.get("resource_id")
+        filters = arguments.get("filters", {})
+        data = arguments.get("data", {})
+
+        # Find matching endpoint based on action
+        endpoints = self.category_endpoints[category]
+        target_endpoint = None
+
+        for ep in endpoints:
+            path = ep["path"]
+            method = ep["method"]
+
+            # Match action to endpoint pattern
+            if action == "list" and method == "get" and "{" not in path:
+                target_endpoint = ep
+                break
+            elif action == "get" and method == "get" and "{" in path and resource_id:
+                target_endpoint = ep
+                break
+            elif action == "create" and method == "post" and "{" not in path:
+                target_endpoint = ep
+                break
+            elif action == "update" and method in ["put", "patch"] and "{" in path and resource_id:
+                target_endpoint = ep
+                break
+            elif action == "delete" and method == "delete" and "{" in path and resource_id:
+                target_endpoint = ep
+                break
+
+        if not target_endpoint:
+            return {"error": f"No endpoint found for action '{action}' in category '{category}'"}
+
+        # Build the request
+        path = target_endpoint["path"]
+        method = target_endpoint["method"]
+
+        # Replace path parameters
+        if resource_id and "{" in path:
+            # Find parameter name (e.g., {id}, {name}, etc.)
+            import re
+            params = re.findall(r'\{([^}]+)\}', path)
+            if params:
+                path = path.replace(f"{{{params[0]}}}", str(resource_id))
+
+        # Make the API call
+        url = f"{self.host}/api{path}"
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Accept": "application/json",
+        }
+
+        kwargs = {"headers": headers, "ssl": self.ssl}
+
+        if action == "list" and filters:
+            kwargs["params"] = filters
+        elif action in ["create", "update"] and data:
+            headers["Content-Type"] = "application/json"
+            kwargs["json"] = data
+
+        result = await self._make_api_call(url=url, method=method, kwargs=kwargs)
+
+        # Add context about the operation and LLM hints
+        context = {
+            "category": category,
+            "action": action,
+            "endpoint": path,
+            "method": method.upper()
+        }
+
+        # Include ALL LLM hints if available - let the AI use what it needs
+        if target_endpoint.get("llm_hints"):
+            context["llm_hints"] = target_endpoint["llm_hints"]
+
+        result["_operation"] = context
+
+        return result
+
+    def _list_endpoints_filtered(self, arguments: Dict) -> dict[str, Any]:
+        """
+        List API endpoints with optional filtering.
+        """
+        category_filter = arguments.get("category")
+        method_filter = arguments.get("method")
+        search_term = arguments.get("search", "").lower()
+
+        results = []
+
+        for path, methods in self.api_spec.get("paths", {}).items():
+            for method, operation in methods.items():
+                if method.lower() not in ["get", "post", "put", "delete", "patch"]:
+                    continue
+
+                # Apply filters
+                if method_filter and method.lower() != method_filter.lower():
+                    continue
+
+                tags = operation.get("tags", [])
+                if category_filter and category_filter not in tags:
+                    continue
+
+                summary = operation.get("summary", "")
+                if search_term and search_term not in path.lower() and search_term not in summary.lower():
+                    continue
+
+                # Extract key LLM hints
+                llm_hints = operation.get("x-llm-hints", {})
+                endpoint_data = {
+                    "path": path,
+                    "method": method.upper(),
+                    "operationId": operation.get("operationId", ""),
+                    "summary": summary,
+                    "tags": tags,
+                    "deprecated": operation.get("deprecated", False)
+                }
+
+                # Add ALL LLM hints if present - let the AI decide what's important
+                if llm_hints:
+                    endpoint_data["llm_hints"] = llm_hints
+
+                results.append(endpoint_data)
+
+        return {
+            "total": len(results),
+            "endpoints": results[:100],  # Limit to prevent huge responses
+            "truncated": len(results) > 100
+        }
+
+    async def _call_endpoint_direct(self, arguments: Dict) -> dict[str, Any]:
+        """
+        Call an API endpoint directly with provided parameters.
+        """
+        path = arguments.get("path")
+        method = arguments.get("method", "get").lower()
+        path_params = arguments.get("path_params", {})
+        query_params = arguments.get("query_params", {})
+        body = arguments.get("body")
+
+        # Replace path parameters
+        for key, value in path_params.items():
+            path = path.replace(f"{{{key}}}", str(value))
+
+        url = f"{self.host}/api{path}"
+        headers = {
+            "Authorization": f"Bearer {self.api_token}",
+            "Accept": "application/json",
+        }
+
+        kwargs = {"headers": headers, "ssl": self.ssl}
+
+        if query_params:
+            kwargs["params"] = query_params
+
+        if body and method in ["post", "put", "patch"]:
+            headers["Content-Type"] = "application/json"
+            kwargs["json"] = body
+
+        return await self._make_api_call(url=url, method=method, kwargs=kwargs)
+
     async def cleanup(self):
         """Cleanup resources."""
         if self.session:
@@ -714,27 +1304,62 @@ Valid filter ops are:
 async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
+        "--mode",
+        choices=["hybrid", "base_only", "categories_only", "endpoints_as_tools"],
+        default="hybrid",
+        help="Tool generation mode (default: hybrid)",
+    )
+    parser.add_argument(
         "--endpoints-as-tools",
         action="store_true",
-        help="Map each API endpoint to a separate MCP tool.",
+        help="Legacy: Map each API endpoint to a separate MCP tool (same as --mode endpoints_as_tools)",
     )
     parser.add_argument(
         "--no-resolve-references",
         action="store_false",
+        dest="resolve_references",
         help="Don't resolve $refs in the API spec. Depending on the MCP client, resolving references may be required.",
     )
     parser.add_argument(
         "--offer-whole-spec",
         action="store_true",
-        help="Offer the entire API spec in the list_api_endpoints tool. Ignored when setting --endpoints-as-tools.",
+        help="Offer the entire API spec in the list_api_endpoints tool. Ignored when using --endpoints-as-tools.",
+    )
+    parser.add_argument(
+        "--no-permission-check",
+        action="store_false",
+        dest="check_permissions",
+        help="Skip permission checking for categories (faster startup but may include inaccessible tools)",
+    )
+    parser.add_argument(
+        "--max-category-tools",
+        type=int,
+        default=10,
+        help="Maximum number of category tools to generate (default: 10)",
+    )
+    parser.add_argument(
+        "--openapi-file",
+        type=str,
+        help="Use local OpenAPI spec file instead of fetching from server",
     )
     args = parser.parse_args()
 
+    # Handle legacy --endpoints-as-tools flag
+    if args.endpoints_as_tools:
+        mode = "endpoints_as_tools"
+    else:
+        mode = args.mode
+
     server = CroitCephServer(
-        endpoints_as_tools=args.endpoints_as_tools,
-        resolve_references=not args.no_resolve_references,
+        mode=mode,
+        resolve_references=args.resolve_references,
         offer_whole_spec=args.offer_whole_spec,
+        max_category_tools=args.max_category_tools,
+        openapi_file=args.openapi_file,
     )
+    # Set permission check flag
+    server.check_permissions = args.check_permissions
+
     try:
         await server.run()
     finally:

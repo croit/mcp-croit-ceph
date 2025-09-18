@@ -1,159 +1,235 @@
-# MCP Registry
+# MCP Croit Ceph
 
-The MCP registry provides MCP clients with a list of MCP servers, like an app store for MCP servers.
+An MCP (Model Context Protocol) server for interacting with Croit Ceph clusters through their REST API.
 
-📖 **[Full documentation](./docs)**
+## Features
 
-## Development Status
+### Hybrid Mode (Default) - 97% Fewer Tools!
 
-> [!WARNING]  
-> The registry is under [active development](#development-status). The registry API spec is unstable and the official MCP registry database may be wiped at any time.
+The new hybrid mode reduces the tool count from 580 individual endpoint tools to just **13 tools total**:
+- **3 Base tools** for full API access
+- **10 Category tools** for common operations (services, maintenance, s3, pools, etc.)
 
-**2025-09-04 update**: We're targeting a 'preview' go-live on 8th September. This may still be unstable and not provide durability guarantees, but is a step towards being more solidified. A general availability (GA) release will follow later.
+This dramatic reduction improves:
+- LLM performance and response times
+- Tool discovery and usability
+- Memory efficiency
+- Startup time
 
-Current key maintainers:
-- **Adam Jones** (Anthropic) [@domdomegg](https://github.com/domdomegg)  
-- **Tadas Antanavicius** (PulseMCP) [@tadasant](https://github.com/tadasant)
-- **Toby Padilla** (GitHub) [@toby](https://github.com/toby)
+### Tool Generation Modes
 
-## Contributing
+1. **`hybrid`** (default): Combines base tools with category tools for optimal balance
+2. **`base_only`**: Only 3 base tools for minimal footprint
+3. **`categories_only`**: Only category tools for simplified operations
+4. **`endpoints_as_tools`**: Legacy mode with 580 individual tools (one per API endpoint)
 
-We use multiple channels for collaboration - see [modelcontextprotocol.io/community/communication](https://modelcontextprotocol.io/community/communication).
+### Dynamic Features
 
-Often (but not always) ideas flow through this pipeline:
+- **Automatic API Discovery**: Fetches OpenAPI spec from your Croit cluster
+- **Permission-Based Filtering**: Only shows tools for accessible API categories
+- **Schema Resolution**: Handles `$ref` references automatically
+- **Local OpenAPI Support**: Use a local OpenAPI spec file for offline development
 
-- **[Discord](https://modelcontextprotocol.io/community/communication)** - Real-time community discussions
-- **[Discussions](https://github.com/modelcontextprotocol/registry/discussions)** - Propose and discuss product/technical requirements
-- **[Issues](https://github.com/modelcontextprotocol/registry/issues)** - Track well-scoped technical work  
-- **[Pull Requests](https://github.com/modelcontextprotocol/registry/pulls)** - Contribute work towards issues
-
-### Quick start:
-
-#### Pre-requisites
-
-- **Docker**
-- **Go 1.24.x** 
-- **golangci-lint v2.4.0**
-
-#### Running the server
+## Installation
 
 ```bash
-# Start full development environment
-make dev-compose
+# Clone the repository
+git clone https://github.com/croit/mcp-croit-ceph.git
+cd mcp-croit-ceph
+
+# Install dependencies
+pip install -r requirements.txt
 ```
 
-This starts the registry at [`localhost:8080`](http://localhost:8080) with PostgreSQL and seed data. It can be configured with environment variables in [docker-compose.yml](./docker-compose.yml) - see [.env.example](./.env.example) for a reference.
+## Configuration
 
-<details>
-<summary>Alternative: Local setup without Docker</summary>
-
-**Prerequisites:**
-- PostgreSQL running locally
-- Go 1.24.x installed
+Set up your environment variables:
 
 ```bash
-# Build and run locally
-make build
-make dev-local
+export CROIT_HOST="https://your-croit-cluster.com"
+export CROIT_API_TOKEN="your-api-token"
 ```
 
-The service runs on [`localhost:8080`](http://localhost:8080) by default. This can be configured with environment variables in `.env` - see [.env.example](./.env.example) for a reference.
+Or use a config file at `/config/config.json`:
 
-</details>
+```json
+{
+  "host": "https://your-croit-cluster.com",
+  "api_token": "your-api-token"
+}
+```
 
-<details>
-<summary>Alternative: Running a pre-built Docker image</summary>
+## Usage
 
-Pre-built Docker images are automatically published to GitHub Container Registry:
+### Basic Usage (Hybrid Mode)
 
 ```bash
-# Run latest stable release
-docker run -p 8080:8080 ghcr.io/modelcontextprotocol/registry:latest
-
-# Run latest from main branch (continuous deployment)
-docker run -p 8080:8080 ghcr.io/modelcontextprotocol/registry:main
-
-# Run specific release version
-docker run -p 8080:8080 ghcr.io/modelcontextprotocol/registry:v1.0.0
-
-# Run development build from main branch
-docker run -p 8080:8080 ghcr.io/modelcontextprotocol/registry:main-20250906-abc123d
+# Default hybrid mode with permission checking
+python mcp-croit-ceph.py
 ```
 
-**Available tags:** 
-- **Releases**: `latest`, `v1.0.0`, `v1.1.0`, etc.
-- **Continuous**: `main` (latest main branch build)
-- **Development**: `main-<date>-<sha>` (specific commit builds)
-
-</details>
-
-#### Publishing a server
-
-To publish a server, we've built a simple CLI. You can use it with:
+### Advanced Options
 
 ```bash
-# Build the latest CLI
-make publisher
+# Use local OpenAPI spec file
+python mcp-croit-ceph.py --openapi-file openapi.json
 
-# Use it!
-./bin/mcp-publisher --help
+# Skip permission checking (faster startup)
+python mcp-croit-ceph.py --no-permission-check
+
+# Use only base tools (minimal mode)
+python mcp-croit-ceph.py --mode base_only
+
+# Use only category tools
+python mcp-croit-ceph.py --mode categories_only
+
+# Legacy mode with all 580 endpoint tools (not recommended)
+python mcp-croit-ceph.py --mode endpoints_as_tools
+
+# Customize category tool limits
+python mcp-croit-ceph.py --max-category-tools 5
 ```
 
-See [the publisher guide](./docs/guides/publishing/publish-server.md) for more details.
+## Tool Modes Explained
 
-#### Other commands
+### Hybrid Mode (Recommended)
+
+Provides the best balance with ~13 tools:
+
+**Base Tools:**
+- `list_endpoints` - Search and filter API endpoints
+- `call_endpoint` - Direct API calls to any endpoint
+- `get_schema` - Resolve schema references
+
+**Category Tools (top 10):**
+- `manage_services` - Ceph services operations
+- `manage_maintenance` - Maintenance tasks
+- `manage_s3` - S3 bucket management
+- `manage_pools` - Storage pool operations
+- `manage_servers` - Server management
+- And more...
+
+Each category tool supports actions like: `list`, `get`, `create`, `update`, `delete`
+
+### Base Only Mode
+
+Minimal setup with just 3 tools for full API access:
+- `list_api_endpoints` - Discover available endpoints
+- `call_api_endpoint` - Make API calls
+- `get_reference_schema` - Resolve schemas
+
+### Categories Only Mode
+
+Simplified interface with only category tools, no base tools.
+
+### Endpoints as Tools Mode (Legacy)
+
+Creates 580 individual tools (one per API endpoint). Not recommended due to:
+- Performance overhead
+- Difficult tool discovery
+- MCP client limitations
+
+## Permission-Based Filtering
+
+The server intelligently filters tools based on the API token's role:
+
+1. **Automatic Role Detection**: Fetches roles via `/auth/token-info` endpoint
+2. **Role-Based Access**:
+   - **ADMIN role**: Full access to all categories
+   - **VIEWER/other roles**: All categories except admin-only operations
+   - **Invalid token**: Server will exit with error (no access)
+
+### Category Access Control
+
+**Admin-Only Categories:**
+- `maintenance`, `servers`, `ipmi` - System management
+- `config`, `hooks`, `change-requests` - Configuration changes
+- `config-templates` - Template management
+
+**All Other Categories** are accessible to VIEWER roles for read operations:
+- `cluster`, `status`, `stats` - Monitoring
+- `logs`, `disks`, `services` - Information viewing
+- `s3`, `cephfs`, `rbds`, `pools` - Storage info
+- `authentication`, `images`, `daos` - Read operations
+- And all others not listed as admin-only
+
+This role-based approach is fast and ensures users only see tools they can actually use.
+
+## Using Local OpenAPI Spec
+
+For offline development or testing:
 
 ```bash
-# Run lint, unit tests and integration tests
-make check
+# Download spec from your cluster
+curl -H "Authorization: Bearer $CROIT_API_TOKEN" \
+     https://your-cluster/api/swagger.json > openapi.json
+
+# Use the local file
+python mcp-croit-ceph.py --openapi-file openapi.json
 ```
 
-There are also a few more helpful commands for development. Run `make help` to learn more, or look in [Makefile](./Makefile).
+## MCP Integration
 
-<!--
-For Claude and other AI tools: Always prefer make targets over custom commands where possible.
--->
+### With Claude Desktop
 
-## Architecture
+Add to your Claude Desktop config:
 
-### Project Structure
-
-```
-├── cmd/                     # Application entry points
-│   └── publisher/           # Server publishing tool
-├── data/                    # Seed data
-├── deploy/                  # Deployment configuration (Pulumi)
-├── docs/                    # Documentation
-├── internal/                # Private application code
-│   ├── api/                 # HTTP handlers and routing
-│   ├── auth/                # Authentication (GitHub OAuth, JWT, namespace blocking)
-│   ├── config/              # Configuration management
-│   ├── database/            # Data persistence (PostgreSQL, in-memory)
-│   ├── service/             # Business logic
-│   ├── telemetry/           # Metrics and monitoring
-│   └── validators/          # Input validation
-├── pkg/                     # Public packages
-│   ├── api/                 # API types and structures
-│   │   └── v0/              # Version 0 API types
-│   └── model/               # Data models for server.json
-├── scripts/                 # Development and testing scripts
-├── tests/                   # Integration tests
-└── tools/                   # CLI tools and utilities
-    └── validate-*.sh        # Schema validation tools
+```json
+{
+  "mcpServers": {
+    "croit-ceph": {
+      "command": "python",
+      "args": ["/path/to/mcp-croit-ceph.py"],
+      "env": {
+        "CROIT_HOST": "https://your-cluster",
+        "CROIT_API_TOKEN": "your-token"
+      }
+    }
+  }
+}
 ```
 
-### Authentication
+### With Other MCP Clients
 
-Publishing supports multiple authentication methods:
-- **GitHub OAuth** - For publishing by logging into GitHub
-- **GitHub OIDC** - For publishing from GitHub Actions
-- **DNS verification** - For proving ownership of a domain and its subdomains
-- **HTTP verification** - For proving ownership of a domain
+The server implements the standard MCP protocol and works with any compatible client.
 
-The registry validates namespace ownership when publishing. E.g. to publish...:
-- `io.github.domdomegg/my-cool-mcp` you must login to GitHub as `domdomegg`, or be in a GitHub Action on domdomegg's repos
-- `me.adamjones/my-cool-mcp` you must prove ownership of `adamjones.me` via DNS or HTTP challenge
+## Command Line Arguments
 
-## More documentation
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--mode` | Tool generation mode | `hybrid` |
+| `--openapi-file` | Local OpenAPI spec file | None (fetch from server) |
+| `--no-permission-check` | Skip permission checking | False (check enabled) |
+| `--max-category-tools` | Max category tools to generate | 10 |
+| `--no-resolve-references` | Don't resolve $ref in spec | False (resolve enabled) |
+| `--offer-whole-spec` | Include full spec in list tool | False |
 
-See the [documentation](./docs) for more details if your question has not been answered here!
+## Development
+
+### Testing Tool Count
+
+```bash
+# Check how many tools will be generated
+python -c "
+from mcp_croit_ceph import CroitCephServer
+server = CroitCephServer(mode='hybrid')
+print(f'Tool count: {len(server.mcp_tools)}')
+"
+```
+
+### Debug Logging
+
+```bash
+# Enable debug logging
+export LOG_LEVEL=DEBUG
+python mcp-croit-ceph.py
+```
+
+## License
+
+Apache 2.0
+
+## Support
+
+For issues specific to this MCP server, please open an issue in this repository.
+For Croit-specific questions, contact Croit support.
