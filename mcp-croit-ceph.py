@@ -1083,30 +1083,9 @@ Valid filter ops are:
         # Handle log search tools
         if self.enable_log_tools:
             if name == "croit_log_search":
-                # Extract host and port from self.host
-                import re
-                match = re.match(r'https?://([^:]+):?(\d+)?', self.host)
-                if match:
-                    host = match.group(1)
-                    port = int(match.group(2)) if match.group(2) else 8080
-                else:
-                    host = self.host
-                    port = 8080
-
-                return await handle_log_search(arguments, host, port)
-
+                return await self._handle_log_search(arguments)
             elif name == "croit_log_monitor":
-                # Extract host and port from self.host
-                import re
-                match = re.match(r'https?://([^:]+):?(\d+)?', self.host)
-                if match:
-                    host = match.group(1)
-                    port = int(match.group(2)) if match.group(2) else 8080
-                else:
-                    host = self.host
-                    port = 8080
-
-                return await handle_log_monitor(arguments, host, port)
+                return await self._handle_log_monitor(arguments)
         if name == self.resolve_references_tool:
             resolved = self._resolve_reference_schema(
                 ref_path=arguments["reference_path"]
@@ -1255,6 +1234,14 @@ Valid filter ops are:
         This is the handler when we don't map each endpoint to a tool, but only offer a few tools to list and call the API directly.
         """
         logger.info(f"Tool call {name}")
+
+        # Handle log search tools
+        if self.enable_log_tools:
+            if name == "croit_log_search":
+                return await self._handle_log_search(arguments)
+            elif name == "croit_log_monitor":
+                return await self._handle_log_monitor(arguments)
+
         if name == self.resolve_references_tool:
             resolved = self._resolve_reference_schema(
                 ref_path=arguments["reference_path"]
@@ -1326,6 +1313,13 @@ Valid filter ops are:
         """
         logger.info(f"Hybrid tool call: {name} with args {arguments}")
 
+        # Handle log search tools
+        if self.enable_log_tools:
+            if name == "croit_log_search":
+                return await self._handle_log_search(arguments)
+            elif name == "croit_log_monitor":
+                return await self._handle_log_monitor(arguments)
+
         # Handle base tools
         if name == self.list_endpoints_tool:
             return self._list_endpoints_filtered(arguments)
@@ -1352,10 +1346,45 @@ Valid filter ops are:
         """
         logger.info(f"Category tool call: {name} with args {arguments}")
 
+        # Handle log search tools
+        if self.enable_log_tools:
+            if name == "croit_log_search":
+                return await self._handle_log_search(arguments)
+            elif name == "croit_log_monitor":
+                return await self._handle_log_monitor(arguments)
+
         if name.startswith("manage_"):
             return await self._handle_category_tool(name, arguments)
 
         raise RuntimeError(f"Unknown tool: {name}")
+
+    async def _handle_log_search(self, arguments: Dict) -> dict[str, Any]:
+        """Handle log search tool call"""
+        # Extract host and port from self.host
+        import re
+        match = re.match(r'https?://([^:]+):?(\d+)?', self.host)
+        if match:
+            host = match.group(1)
+            port = int(match.group(2)) if match.group(2) else 8080
+        else:
+            host = self.host
+            port = 8080
+
+        return await handle_log_search(arguments, host, port)
+
+    async def _handle_log_monitor(self, arguments: Dict) -> dict[str, Any]:
+        """Handle log monitor tool call"""
+        # Extract host and port from self.host
+        import re
+        match = re.match(r'https?://([^:]+):?(\d+)?', self.host)
+        if match:
+            host = match.group(1)
+            port = int(match.group(2)) if match.group(2) else 8080
+        else:
+            host = self.host
+            port = 8080
+
+        return await handle_log_monitor(arguments, host, port)
 
     async def _handle_category_tool(
         self,

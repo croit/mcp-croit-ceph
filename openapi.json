@@ -25578,6 +25578,42 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Enable or disable CephFS standby replay for the specified filesystem.",
+          "usage" : [ "Turn on standby replay to improve failover times for CephFS clients.", "Disable standby replay when reducing resource usage or during troubleshooting." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "allowStandbyReplay",
+            "in" : "body",
+            "description" : "true to enable standby replay.",
+            "required" : true,
+            "example" : "true"
+          }, {
+            "name" : "cephFsName",
+            "in" : "body",
+            "description" : "Optional CephFS name; defaults to croitConfig.cephFsName.",
+            "required" : false,
+            "example" : "cephfs"
+          } ],
+          "failure_modes" : [ "400 if CephFS is not configured or the filesystem name is unknown", "500 if the Ceph CLI command fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Create the CephFS (MDS service) or supply a valid filesystem name before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Check Ceph health/logs; retry after resolving CLI errors."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 600,
+            "note" : "CephFS standby replay toggle"
+          },
+          "related_endpoints" : [ "/maintenance/allow-standby-replay", "/maintenance/max-mds" ],
+          "postprocessing_hint" : "Sleep for a few seconds (as the method already does) then refresh GET /maintenance/allow-standby-replay to confirm.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "get" : {
@@ -25969,6 +26005,75 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Configure the automatic croit container update schedule and optional custom registry settings.",
+          "usage" : [ "Enable scheduled updates after defining an appropriate maintenance window.", "Switch to a private registry or custom image tags for controlled rollouts." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "enabled",
+            "in" : "body",
+            "description" : "true to enable the cron-based auto-update job.",
+            "required" : true,
+            "example" : "true"
+          }, {
+            "name" : "cron",
+            "in" : "body",
+            "description" : "Cron expression executed when enabled; required if enabled=true.",
+            "required" : false,
+            "example" : "0 2 * * *"
+          }, {
+            "name" : "custom",
+            "in" : "body",
+            "description" : "true to override registry credentials/image/tag.",
+            "required" : true,
+            "example" : "false"
+          }, {
+            "name" : "registry",
+            "in" : "body",
+            "description" : "Custom registry URL when custom=true.",
+            "required" : false,
+            "example" : "registry.example.com"
+          }, {
+            "name" : "registryUsername",
+            "in" : "body",
+            "description" : "Custom registry username.",
+            "required" : false,
+            "example" : "robot"
+          }, {
+            "name" : "registryPassword",
+            "in" : "body",
+            "description" : "Custom registry password.",
+            "required" : false,
+            "example" : "******"
+          }, {
+            "name" : "imageName",
+            "in" : "body",
+            "description" : "Image repository name.",
+            "required" : true,
+            "example" : "croit/server"
+          }, {
+            "name" : "croitTag",
+            "in" : "body",
+            "description" : "Image tag to deploy.",
+            "required" : true,
+            "example" : "latest"
+          } ],
+          "failure_modes" : [ "400 if cron is missing while enabled=true, or registry credentials are incomplete", "400 if offline mode prevents enabling auto updates" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Provide matching registry credentials, a valid cron expression, and ensure offline mode is disabled before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 86400,
+            "note" : "Auto-update scheduling"
+          },
+          "related_endpoints" : [ "/maintenance/croit-auto-update", "/maintenance/update-now" ],
+          "postprocessing_hint" : "Re-query GET /maintenance/croit-auto-update to verify the applied configuration.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -25993,6 +26098,33 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Set the maximum allowed CPU idle state (C-state) to favor performance over power savings.",
+          "usage" : [ "Enable high-performance mode on latency-sensitive clusters.", "Revert to default behaviour by sending null when the tuning window ends." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "limit",
+            "in" : "body",
+            "description" : "Maximum allowed C-state (null to disable restriction).",
+            "required" : false,
+            "example" : "1"
+          } ],
+          "failure_modes" : [ "500 if persisting the configuration fails" ],
+          "error_handling" : [ {
+            "code" : "500",
+            "action" : "Check configuration storage/logs, then retry once the issue is resolved."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "CPU tuning"
+          },
+          "related_endpoints" : [ "/maintenance/disable-cpu-idle-states", "/maintenance/update-now" ],
+          "postprocessing_hint" : "Follow with GET /maintenance/disable-cpu-idle-states to show the applied value.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -26112,6 +26244,36 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Enable a Ceph cluster flag (e.g. noout, norecover).",
+          "usage" : [ "Put the cluster into a maintenance posture before planned hardware work.", "Rapidly toggle debug flags during incident response." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "flag",
+            "in" : "path",
+            "description" : "Ceph cluster flag name.",
+            "required" : true,
+            "example" : "noout"
+          } ],
+          "failure_modes" : [ "400 if the flag name is invalid", "500 if the Ceph CLI command fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "List available flags via GET /maintenance/flags before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect Ceph health/logs and reapply once the cluster is responsive."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 600,
+            "note" : "Ceph flag toggles"
+          },
+          "related_endpoints" : [ "/maintenance/flags", "/maintenance/flags/{flag}/unset" ],
+          "postprocessing_hint" : "Re-query GET /maintenance/flags to confirm the flag state.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -26136,6 +26298,36 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Disable a previously set Ceph cluster flag.",
+          "usage" : [ "Return the cluster to normal behaviour after maintenance.", "Switch off debug or throttling flags post-investigation." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "flag",
+            "in" : "path",
+            "description" : "Ceph cluster flag name.",
+            "required" : true,
+            "example" : "noout"
+          } ],
+          "failure_modes" : [ "400 if the flag name is invalid", "500 if the Ceph CLI command fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Confirm the flag name via GET /maintenance/flags."
+          }, {
+            "code" : "500",
+            "action" : "Review Ceph status/logs before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 600,
+            "note" : "Ceph flag toggles"
+          },
+          "related_endpoints" : [ "/maintenance/flags", "/maintenance/flags/{flag}/set" ],
+          "postprocessing_hint" : "Check Ceph health once the flag is cleared.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -26159,6 +26351,39 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Adjust the CephFS max_mds value controlling the number of active metadata servers.",
+          "usage" : [ "Increase max_mds when adding additional MDS daemons to scale read/write workloads.", "Lower max_mds after removing MDS servers or during troubleshooting." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "maxMds",
+            "in" : "body",
+            "description" : "Desired maximum number of active MDS ranks (must be >0).",
+            "required" : true,
+            "example" : "2"
+          } ],
+          "failure_modes" : [ "400 if CephFS is not configured or the value is ≤ 0", "200 with ignorable warning if decreasing could disrupt clients or insufficient MDS daemons are configured", "500 if the Ceph CLI command fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure a filesystem exists and choose a value greater than zero."
+          }, {
+            "code" : "200",
+            "action" : "Review the warning (insufficient MDS servers or decreasing ranks) and acknowledge only if acceptable."
+          }, {
+            "code" : "500",
+            "action" : "Check Ceph status/logs and retry once the command succeeds."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "CephFS MDS scaling"
+          },
+          "related_endpoints" : [ "/maintenance/allow-standby-replay", "/maintenance/max-mds" ],
+          "postprocessing_hint" : "Monitor CephFS client health and re-fetch GET /maintenance/max-mds to confirm the new value.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -26384,6 +26609,36 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Raise or lower the minimum allowed Ceph client version (min-compat-client).",
+          "usage" : [ "Enforce a newer client baseline before rolling out features that require it.", "Relax the requirement temporarily when supporting older clients during migrations." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "release",
+            "in" : "body",
+            "description" : "Minimum client Ceph release (e.g. octopus, pacific).",
+            "required" : true,
+            "example" : "pacific"
+          } ],
+          "failure_modes" : [ "400 if the requested release is newer than the running cluster version", "500 if the Ceph CLI command fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Upgrade the cluster first or pick a release ≤ current cluster version."
+          }, {
+            "code" : "500",
+            "action" : "Check Ceph health/logs before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 86400,
+            "note" : "Client compatibility update"
+          },
+          "related_endpoints" : [ "/maintenance/min-compat-client" ],
+          "postprocessing_hint" : "Notify client owners about the new minimum version requirement.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "get" : {
@@ -26456,6 +26711,48 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Adjust the Ceph OSD fullness thresholds (nearfull/backfillfull/full) to control when warnings and backfill throttling occur.",
+          "usage" : [ "Tighten thresholds before maintenance to trigger earlier alerts.", "Relax thresholds temporarily during capacity expansions." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "nearfull",
+            "in" : "body",
+            "description" : "Optional new nearfull ratio (0–1).",
+            "required" : false,
+            "example" : "0.80"
+          }, {
+            "name" : "backfillfull",
+            "in" : "body",
+            "description" : "Optional new backfillfull ratio (0–1).",
+            "required" : false,
+            "example" : "0.85"
+          }, {
+            "name" : "full",
+            "in" : "body",
+            "description" : "Optional new full ratio (0–1).",
+            "required" : false,
+            "example" : "0.95"
+          } ],
+          "failure_modes" : [ "400 if the invariant 0 < nearfull < backfillfull < full < 0.98 is violated or NaN is provided", "500 if any Ceph CLI command fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Submit ratios that preserve the strict inequality and fall below 0.98."
+          }, {
+            "code" : "500",
+            "action" : "Check Ceph health and re-run once commands succeed."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "OSD fullness tuning"
+          },
+          "related_endpoints" : [ "/maintenance/osd-full-ratios" ],
+          "postprocessing_hint" : "After applying, monitor osd perf counters to ensure new thresholds behave as expected.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -26682,6 +26979,33 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Tune Ceph OSD recovery throttling using a normalized 1–10 scale (higher = faster recovery).",
+          "usage" : [ "Slow down recovery during peak client traffic to preserve performance.", "Speed up rebalancing after large hardware events or OSD additions." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "speed",
+            "in" : "body",
+            "description" : "Integer 1–10 (≤0 resets to default).",
+            "required" : true,
+            "example" : "7"
+          } ],
+          "failure_modes" : [ "500 if Ceph configuration updates fail" ],
+          "error_handling" : [ {
+            "code" : "500",
+            "action" : "Inspect Ceph config logs and ensure monitors accept the new values before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "Recovery speed tuning"
+          },
+          "related_endpoints" : [ "/maintenance/recovery-speed" ],
+          "postprocessing_hint" : "Monitor recovery IOPS and client latency after changing the speed.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "get" : {
@@ -26799,6 +27123,33 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Change the timezone used for scheduled maintenance jobs and cron-like tasks.",
+          "usage" : [ "Align scheduled tasks with a new operations timezone after datacenter handover.", "Adjust cron execution times for daylight-saving or corporate policy changes." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "timezone",
+            "in" : "body",
+            "description" : "IANA timezone identifier (e.g. Europe/Berlin, GMT-8:00).",
+            "required" : true,
+            "example" : "America/Los_Angeles"
+          } ],
+          "failure_modes" : [ "400 if the timezone is invalid" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Confirm the timezone string is a valid IANA identifier or supported offset."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Scheduling configuration"
+          },
+          "related_endpoints" : [ "/maintenance/schedulingTimezone", "/maintenance/croit-auto-update" ],
+          "postprocessing_hint" : "Update user documentation because cron expressions continue to run but interpreted in the new timezone.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -27970,6 +28321,59 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Remove a snapshot mirroring schedule at pool/image/namespace granularity.",
+          "usage" : [ "Clean up schedules after converting images away from snapshot-based mirroring.", "Remove erroneously configured intervals prior to creating new ones." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "interval",
+            "in" : "body",
+            "description" : "Schedule interval string (e.g. 24h).",
+            "required" : true,
+            "example" : "24h"
+          }, {
+            "name" : "startTime",
+            "in" : "body",
+            "description" : "Optional start timestamp in ISO-8601; null to accept default.",
+            "required" : false,
+            "example" : "2024-05-01T00:00:00Z"
+          }, {
+            "name" : "pool",
+            "in" : "body",
+            "description" : "Optional pool scope (use '-' to indicate unspecified).",
+            "required" : false,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "body",
+            "description" : "Optional image scope (use '-' to indicate unspecified).",
+            "required" : false,
+            "example" : "vm-001"
+          }, {
+            "name" : "namespace",
+            "in" : "body",
+            "description" : "Optional namespace scope (use '-' for default).",
+            "required" : false,
+            "example" : "-"
+          } ],
+          "failure_modes" : [ "404 if the targeted schedule does not exist", "500 if the Ceph command to remove the schedule fails" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "List schedules first and ensure the payload matches exactly (pool/rbd/namespace/interval)."
+          }, {
+            "code" : "500",
+            "action" : "Inspect Ceph logs; retry after resolving any CLI errors."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Mirror schedule management"
+          },
+          "related_endpoints" : [ "/pools/rbd-mirror/schedules", "/pools/rbd-mirror/schedules (POST)" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "post" : {
@@ -27991,6 +28395,59 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Create a snapshot mirroring schedule scoped to a pool, namespace, or individual image.",
+          "usage" : [ "Automate regular snapshot creation for mirroring to remote clusters.", "Set up per-image schedules when different intervals are required." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "interval",
+            "in" : "body",
+            "description" : "Interval string (e.g. 24h, 1h).",
+            "required" : true,
+            "example" : "24h"
+          }, {
+            "name" : "startTime",
+            "in" : "body",
+            "description" : "Optional start timestamp in ISO-8601; null means immediate.",
+            "required" : false,
+            "example" : "2024-05-01T00:00:00Z"
+          }, {
+            "name" : "pool",
+            "in" : "body",
+            "description" : "Pool scope (use '-' to indicate all pools).",
+            "required" : false,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "body",
+            "description" : "Optional image name (use '-' to target entire pool).",
+            "required" : false,
+            "example" : "vm-001"
+          }, {
+            "name" : "namespace",
+            "in" : "body",
+            "description" : "Optional namespace for Octopus+ (use '-' for default).",
+            "required" : false,
+            "example" : "tenant-a"
+          } ],
+          "failure_modes" : [ "400 if mirroring is not configured or the request is invalid", "500 if Ceph fails to add the schedule" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure the pool/image is set to snapshot mode with peers configured before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Review Ceph logs; retry after resolving CLI errors."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Mirror schedule management"
+          },
+          "related_endpoints" : [ "/pools/rbd-mirror/schedules", "/pools/rbd-mirror/schedules (DELETE)" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -28596,6 +29053,49 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Apply or update QoS limits for an entire RBD pool.",
+          "usage" : [ "Throttle IOPS/BPS for all images in a pool with shared workloads.", "Restore defaults by submitting commands with null/0 limits to remove overrides." ],
+          "response_shape" : "array<QosCommandAppliedResponse>",
+          "request_parameters" : [ {
+            "name" : "commands[].command",
+            "in" : "body",
+            "description" : "QoS command identifier (e.g. pool_iops_max).",
+            "required" : true,
+            "example" : "pool_iops_max"
+          }, {
+            "name" : "commands[].limit",
+            "in" : "body",
+            "description" : "Unsigned integer limit (0 or null removes).",
+            "required" : false,
+            "example" : "1000"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool whose QoS should be adjusted.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "400 if any command is invalid or duplicated", "500 if Ceph fails to apply the limit" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Use supported QoS commands listed in documentation and avoid duplicates."
+          }, {
+            "code" : "500",
+            "action" : "Review Ceph logs; ensure the pool exists and retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "QoS configuration"
+          },
+          "related_endpoints" : [ "/pools/{pool}/qos", "/pools/{pool}/rbds/{rbd}/qos" ],
+          "postprocessing_hint" : "Retrieve GET /pools/{pool}/qos to verify each command's result.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "get" : {
@@ -28664,6 +29164,49 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Remove previously configured pool-level QoS limits for all images in the pool.",
+          "usage" : [ "Reset QoS settings before applying new limits across the pool.", "Clear inherited limits when migrating to per-image QoS policies." ],
+          "response_shape" : "QosCommandAppliedResponse",
+          "request_parameters" : [ {
+            "name" : "command",
+            "in" : "body",
+            "description" : "QoS command identifier to remove (e.g. pool_iops_max).",
+            "required" : true,
+            "example" : "pool_iops_max"
+          }, {
+            "name" : "limit",
+            "in" : "body",
+            "description" : "Ignored for deletion; supply 0 to mirror the POST payload format.",
+            "required" : false,
+            "example" : "0"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool whose QoS limit should be removed.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "400 if the command name is invalid", "500 if the Ceph command fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "List valid commands via GET /pools/qos commands (or documentation) and retry with a supported value."
+          }, {
+            "code" : "500",
+            "action" : "Inspect Ceph logs; ensure the pool exists and retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "QoS configuration"
+          },
+          "related_endpoints" : [ "/pools/{pool}/qos", "/pools/{pool}/rbds/{rbd}/qos" ],
+          "postprocessing_hint" : "Fetch GET /pools/{pool}/qos to confirm the command is absent.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -28796,6 +29339,49 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Toggle journaling on all non-snapshot mirrored images within a pool.",
+          "usage" : [ "Enable journaling before switching a pool to journal-based mirroring.", "Disable journaling to improve performance once snapshot mode is in use." ],
+          "response_shape" : "ManagedThreadTask",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace scope.",
+            "required" : false,
+            "example" : "tenant-a"
+          }, {
+            "name" : "enableJournaling",
+            "in" : "body",
+            "description" : "true to enable, false to disable.",
+            "required" : true,
+            "example" : "true"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool whose images should be updated.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "400 if journaling is requested on incompatible images or CephFS is not configured", "500 if enabling/disabling fails on individual images" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure images are not in snapshot mode when enabling journaling and client support exists."
+          }, {
+            "code" : "500",
+            "action" : "Inspect task logs for failed images; address issues and rerun."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "Pool journaling toggle"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbd-mirror", "/pools/{pool}/rbd-mirror/peers" ],
+          "postprocessing_hint" : "Review the task log for per-image errors and request a resync if needed.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -28835,6 +29421,61 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Import an RBD mirroring peer into the pool using a bootstrap token.",
+          "usage" : [ "Set up bi-directional mirroring between clusters by applying the remote token.", "Re-add a peer after cleaning up mismatched keys or changing site names." ],
+          "response_shape" : "ManagedThreadTask",
+          "request_parameters" : [ {
+            "name" : "peerToken",
+            "in" : "body",
+            "description" : "Bootstrap token JSON from the remote cluster.",
+            "required" : true,
+            "example" : "{...}"
+          }, {
+            "name" : "direction",
+            "in" : "body",
+            "description" : "Mirroring direction (rx_tx or tx_only).",
+            "required" : false,
+            "example" : "rx_tx"
+          }, {
+            "name" : "siteName",
+            "in" : "body",
+            "description" : "Optional remote site label.",
+            "required" : false,
+            "example" : "prod-west"
+          }, {
+            "name" : "localSiteName",
+            "in" : "body",
+            "description" : "Optional local site label to embed in the remote cluster.",
+            "required" : false,
+            "example" : "prod-east"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool that should mirror to the remote peer.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "400 if mirroring is disabled or more than one peer is unsupported", "400 if site names have invalid characters", "500 if importing the token fails (e.g. key conflicts)" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Enable mirroring and ensure only one peer is configured when Ceph restricts it."
+          }, {
+            "code" : "500",
+            "action" : "Review task output for key mismatches; delete conflicting keys when prompted and retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "Peer onboarding"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbd-mirror/peers/{id}", "/pools/{pool}/rbd-mirror/token" ],
+          "postprocessing_hint" : "Restart rbd-mirror daemons if necessary and verify the peer appears in GET /pools/{pool}/rbd-mirror.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -28921,6 +29562,41 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Remove a configured RBD mirroring peer from a pool.",
+          "usage" : [ "Call when retiring a remote cluster from mirroring.", "Clean up misconfigured peers before adding correct settings." ],
+          "response_shape" : "ManagedThreadTask",
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool whose peer should be removed.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Global peer UUID to delete.",
+            "required" : true,
+            "example" : "3cf9834e-9d34-4e3e-8b39-4bbdcf3c4a59"
+          } ],
+          "failure_modes" : [ "404 if the peer ID is unknown", "500 if Ceph refuses to remove the peer" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "List peers first and retry with a valid UUID."
+          }, {
+            "code" : "500",
+            "action" : "Inspect Ceph logs; ensure the peer is not in use before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Mirror peer management"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbd-mirror/peers", "/pools/{pool}/rbd-mirror/peers (POST)" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -29870,6 +30546,61 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Configure QoS limits on a specific RBD image, optionally overriding pool defaults.",
+          "usage" : [ "Throttle noisy tenants by applying per-image IOPS/BPS caps.", "Remove overrides by sending commands with null/0 limit values." ],
+          "response_shape" : "array<QosCommandAppliedResponse>",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace.",
+            "required" : false,
+            "example" : "tenant-a"
+          }, {
+            "name" : "commands[].command",
+            "in" : "body",
+            "description" : "QoS command identifier (e.g. limit_iops).",
+            "required" : true,
+            "example" : "limit_iops"
+          }, {
+            "name" : "commands[].limit",
+            "in" : "body",
+            "description" : "Unsigned integer limit; null removes the setting.",
+            "required" : false,
+            "example" : "500"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool hosting the image.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Image name to configure.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "failure_modes" : [ "400 if commands are invalid or duplicated", "500 if Ceph fails to apply the limit" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure commands come from the supported set and avoid duplicates."
+          }, {
+            "code" : "500",
+            "action" : "Check Ceph logs; verify the image exists and retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "QoS configuration"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}/qos", "/pools/{pool}/qos" ],
+          "postprocessing_hint" : "Call GET /pools/{pool}/rbds/{rbd}/qos to confirm applied limits and inherited values.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "get" : {
@@ -29967,6 +30698,61 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Remove a specific QoS limit from an RBD image (optionally scoped by namespace).",
+          "usage" : [ "Clear overrides before inheriting pool-wide QoS policies.", "Reset an image to unlimited IOPS/BPS after finishing migration tests." ],
+          "response_shape" : "QosCommandAppliedResponse",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace.",
+            "required" : false,
+            "example" : "tenant-a"
+          }, {
+            "name" : "command",
+            "in" : "body",
+            "description" : "QoS command identifier to remove (e.g. limit_iops).",
+            "required" : true,
+            "example" : "limit_iops"
+          }, {
+            "name" : "limit",
+            "in" : "body",
+            "description" : "Ignored for deletion; provide 0 for compatibility with POST payloads.",
+            "required" : false,
+            "example" : "0"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool hosting the image.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Image name whose QoS is being cleared.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "failure_modes" : [ "400 if the command name is invalid", "500 if Ceph fails to remove the QoS setting" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Use a supported QoS command (see documentation) before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Check Ceph logs and ensure the image exists; retry once resolved."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "QoS configuration"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}/qos", "/pools/{pool}/qos" ],
+          "postprocessing_hint" : "Re-run GET /pools/{pool}/rbds/{rbd}/qos to verify the command is absent.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -30062,6 +30848,48 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Request a re-synchronization of a mirrored RBD image with its remote peer.",
+          "usage" : [ "Trigger after recovering from divergence on a secondary image.", "Flag an image for resync when the remote copy may be stale." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace (Octopus+).",
+            "required" : false,
+            "example" : "tenant-a"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool containing the image.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Image name to resync.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "failure_modes" : [ "400 if the image is primary or mirroring is disabled", "400 if namespaces are used on unsupported releases", "500 if Ceph fails to mark the image for resync" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure the image is a non-primary mirrored secondary and that namespaces are supported."
+          }, {
+            "code" : "500",
+            "action" : "Inspect Ceph logs to identify why the resync flag could not be set."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Mirror maintenance"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}/rbd-mirror", "/pools/{pool}/rbds/{rbd}/rbd-mirror/snapshots" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -30149,6 +30977,48 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Create a mirroring snapshot for an image configured in snapshot mode.",
+          "usage" : [ "Generate an on-demand snapshot to seed mirroring prior to scheduled runs.", "Create recovery points before maintenance on mirrored workloads." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace (Octopus+).",
+            "required" : false,
+            "example" : "tenant-a"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool containing the image.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Image name to snapshot.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "failure_modes" : [ "400 if the image is not in snapshot mirror mode", "400 if the pool has no configured peers", "400 if namespaces are used on unsupported releases", "500 if Ceph fails to create the snapshot" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure the image operates in snapshot mode with peers configured before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Review Ceph logs for snapshot creation errors."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "Mirror snapshot operations"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}/rbd-mirror", "/pools/{pool}/rbds/{rbd}/rbd-mirror/snapshots (GET)" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
