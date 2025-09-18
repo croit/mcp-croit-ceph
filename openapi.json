@@ -19246,6 +19246,42 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Delete a DAOS pool from the specified cluster and remove cached metadata.",
+          "usage" : [ "Clean up pools that are no longer required before reclaiming storage.", "Recreate pools with different properties after explicitly removing the old instance." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "daosId",
+            "in" : "path",
+            "description" : "DAOS cluster identifier in croit.",
+            "required" : true,
+            "example" : "5"
+          }, {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool name or UUID to delete.",
+            "required" : true,
+            "example" : "8601f8c6-..."
+          } ],
+          "failure_modes" : [ "404 if the pool cannot be resolved for the given cluster", "500 if the DAOS remove operation fails" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh DAOS pool listings and retry with a valid identifier."
+          }, {
+            "code" : "500",
+            "action" : "Inspect DAOS server logs; ensure the pool is disconnected from clients before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "DAOS pool deletion"
+          },
+          "related_endpoints" : [ "/daos/{daosId}/pools", "/daos/{daosId}/pools/{pool}/reintegrate" ],
+          "postprocessing_hint" : "Trigger a DAOS pool cache refresh to update UI listings.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -20762,6 +20798,54 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Install the croit management image onto selected boot disks across one or more servers.",
+          "usage" : [ "Deploy croit onto fresh hardware before adding the servers to the cluster.", "Reinstall the management stack after wiping or replacing boot drives." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "disks[].server",
+            "in" : "body",
+            "description" : "Server ID hosting the disk.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "disks[].disk",
+            "in" : "body",
+            "description" : "Disk ID to receive the croit installation.",
+            "required" : true,
+            "example" : "145"
+          }, {
+            "name" : "disks[].serial",
+            "in" : "body",
+            "description" : "Disk serial for confirmation.",
+            "required" : true,
+            "example" : "S3X4ABCD"
+          }, {
+            "name" : "disks[].destroy",
+            "in" : "body",
+            "description" : "true to destroy existing OSD metadata when reusing disks.",
+            "required" : false,
+            "example" : "false"
+          } ],
+          "failure_modes" : [ "400 if the request is empty, contains duplicates, or disks are too small/in use", "400 if container switching is required but not allowed in offline mode", "200 ManagedTask(status=FAILED) if installation steps fail on a subset of disks" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure disks are unassigned, online, and meet size requirements; wipe them if necessary."
+          }, {
+            "code" : "200",
+            "action" : "Inspect the ManagedTask log to identify failed hosts and rerun only for those disks."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 2,
+            "window_seconds" : 86400,
+            "note" : "Boot disk installation"
+          },
+          "related_endpoints" : [ "/disks/wipe", "/servers/{id}/reboot", "/tasks" ],
+          "postprocessing_hint" : "After the task succeeds, reboot the servers from the freshly installed disks.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -20937,6 +21021,54 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Securely wipe one or more disks, optionally destroying associated OSDs in the cluster map.",
+          "usage" : [ "Prepare disks for reuse after removing OSDs or other data.", "Clean drives prior to decommissioning hardware from the cluster." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "disks[].server",
+            "in" : "body",
+            "description" : "Server ID hosting the disk.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "disks[].disk",
+            "in" : "body",
+            "description" : "Disk ID to wipe.",
+            "required" : true,
+            "example" : "145"
+          }, {
+            "name" : "disks[].serial",
+            "in" : "body",
+            "description" : "Serial confirmation string to avoid wiping the wrong disk.",
+            "required" : true,
+            "example" : "S3X4ABCD"
+          }, {
+            "name" : "disks[].destroy",
+            "in" : "body",
+            "description" : "true to remove the OSD from the CRUSH map after wiping.",
+            "required" : false,
+            "example" : "false"
+          } ],
+          "failure_modes" : [ "400 if the request is empty, contains duplicates, or serial numbers do not match", "400 if any disk is boot media or in use by DAOS", "200 ManagedTask(status=FAILED) if wiping fails on a subset of disks" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Validate disk ownership, serial numbers, and DAOS usage before retrying."
+          }, {
+            "code" : "200",
+            "action" : "Inspect task logs to identify disks that failed and rerun the wipe for those drives only."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 4,
+            "window_seconds" : 3600,
+            "note" : "Disk wiping"
+          },
+          "related_endpoints" : [ "/servers/{id}/disks", "/disks/create-osds", "/tasks" ],
+          "postprocessing_hint" : "Monitor the ManagedTask until completion and run hardware detection to confirm disks are blank.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -21024,6 +21156,36 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Execute a basic synchronous write benchmark on an unassigned disk to measure worst-case journal throughput.",
+          "usage" : [ "Evaluate new disks before assigning them to critical roles (journals/DB).", "Collect performance metrics for hardware surveys or troubleshooting." ],
+          "response_shape" : "ManagedTask",
+          "path_parameters" : [ {
+            "name" : "diskId",
+            "in" : "path",
+            "description" : "Disk identifier from GET /disks or /servers/{id}/disks.",
+            "required" : true,
+            "example" : "512"
+          } ],
+          "failure_modes" : [ "404 if the disk or server no longer exists", "400 if the disk is assigned or has partitions/mountpoints", "200 ManagedTask(status=FAILED) if fio or SSH commands fail during the benchmark" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure the disk is unassigned, unmounted, and wiped before benchmarking."
+          }, {
+            "code" : "200",
+            "action" : "Review task logs for fio/SSH failures, correct the issue, then rerun."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 86400,
+            "note" : "Disk benchmarking"
+          },
+          "related_endpoints" : [ "/disks", "/servers/{id}/disks", "/disks/install-croit" ],
+          "postprocessing_hint" : "Capture the ManagedTask output for archival or hardware survey submissions.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -22459,6 +22621,45 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Resize an NVMe-oF disk and propagate changes to the backing storage (Ceph RBD or DAOS).",
+          "usage" : [ "Expand a Ceph-backed NVMe-oF LUN after increasing the application quota.", "Grow DAOS-backed exports once additional capacity has been provisioned." ],
+          "response_shape" : "ManagedThreadTask?",
+          "request_parameters" : [ {
+            "name" : "size",
+            "in" : "body",
+            "description" : "New size in bytes; omit to leave the disk unchanged.",
+            "required" : false,
+            "example" : "549755813888"
+          } ],
+          "path_parameters" : [ {
+            "name" : "diskId",
+            "in" : "path",
+            "description" : "NVMe-oF disk identifier.",
+            "required" : true,
+            "example" : "17"
+          } ],
+          "failure_modes" : [ "200 null when no size is provided (no-op)", "400 if attempting to shrink a DAOS-backed disk", "500 if underlying Ceph/DAOS resize commands fail" ],
+          "error_handling" : [ {
+            "code" : "200",
+            "action" : "Provide a new size to trigger a resize."
+          }, {
+            "code" : "400",
+            "action" : "Detach the disk from NVMe-oF and adjust it within DAOS before attempting to shrink."
+          }, {
+            "code" : "500",
+            "action" : "Inspect the ManagedThreadTask log and storage backends; fix the issue then retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "NVMe-oF disk resize"
+          },
+          "related_endpoints" : [ "/gateways/nvmeof/disks", "/gateways/nvmeof/disks/{diskId}", "/pools/{pool}/rbds/{rbd}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -26076,6 +26277,28 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Switch the running croit container to the image required by the target Ceph release.",
+          "usage" : [ "Invoke when GET /maintenance/migrations indicates a container switch is required before continuing upgrades.", "Use to realign container versions after manual changes." ],
+          "response_shape" : "ManagedTask",
+          "failure_modes" : [ "400 if running offline or already on the correct container", "400 if the target release is below the minimum supported", "500 if the switch process fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Follow the guidance in the error message (disable offline mode or upgrade Ceph first)."
+          }, {
+            "code" : "500",
+            "action" : "Review task logs to address failures before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 2,
+            "window_seconds" : 86400,
+            "note" : "Container switch"
+          },
+          "related_endpoints" : [ "/maintenance/migrations", "/maintenance/migrations/{release}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -26106,6 +26329,36 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Kick off a Ceph major upgrade to the specified release.",
+          "usage" : [ "Upgrade Ceph to a newer supported release following the guided migration flow.", "Resume an interrupted upgrade by reissuing the same release once prerequisites are satisfied." ],
+          "response_shape" : "ManagedTask",
+          "path_parameters" : [ {
+            "name" : "release",
+            "in" : "path",
+            "description" : "Target Ceph release (e.g. quincy, reef).",
+            "required" : true,
+            "example" : "reef"
+          } ],
+          "failure_modes" : [ "400 if the release is unsupported or prerequisites are not met", "500 if upgrade steps fail midway" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Use GET /maintenance/migrations to verify available upgrades and resolve prerequisites."
+          }, {
+            "code" : "500",
+            "action" : "Inspect the ManagedTask log, address reported issues, then rerun the upgrade."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 2,
+            "window_seconds" : 86400,
+            "note" : "Ceph major upgrade"
+          },
+          "related_endpoints" : [ "/maintenance/migrations", "/maintenance/migrations/switch-container" ],
+          "postprocessing_hint" : "Monitor the ManagedTask and validate cluster health after completion.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -26278,6 +26531,35 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Request a deep scrub (byte-for-byte verification) for all PGs on a specific OSD.",
+          "usage" : [ "Run after hardware incidents to validate data integrity.", "Supplement automatic deep scrubs for clusters with extended intervals." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "osdId",
+            "in" : "path",
+            "description" : "Numeric OSD identifier.",
+            "required" : true,
+            "example" : "12"
+          } ],
+          "failure_modes" : [ "404 if the OSD ID is unknown", "500 if Ceph refuses the deep scrub (cluster busy or unhealthy)" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Ensure the OSD still exists before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Wait until cluster load decreases and deep-scrub throttles permit execution."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 86400,
+            "note" : "Manual deep scrubs"
+          },
+          "related_endpoints" : [ "/maintenance/osd/{osdId}/scrub", "/pools/{name}/deep-scrub" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -26303,6 +26585,35 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Request an immediate scrub for all placement groups hosted by a specific OSD.",
+          "usage" : [ "Invoke after resolving data inconsistencies or performing disk maintenance.", "Trigger periodic manual scrubs for critical OSDs outside automatic scheduling." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "osdId",
+            "in" : "path",
+            "description" : "Numeric OSD identifier (without the osd. prefix).",
+            "required" : true,
+            "example" : "12"
+          } ],
+          "failure_modes" : [ "404 if the OSD ID is unknown", "500 if Ceph rejects the scrub request" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh OSD inventories before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Check Ceph health detail and active scrubs; retry once the cluster is ready."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Manual OSD scrubs"
+          },
+          "related_endpoints" : [ "/maintenance/osd/{osdId}/deep-scrub", "/pools/{name}/scrub" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -26325,6 +26636,26 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Reboot every server that is not running its configured croit image to apply pending updates.",
+          "usage" : [ "Execute after updating the default image to ensure all nodes boot the latest version.", "Use when maintenance tasks require a coordinated restart across the fleet." ],
+          "response_shape" : "ManagedTask",
+          "failure_modes" : [ "200 ManagedTask(status=FAILED) if some servers fail to reboot" ],
+          "error_handling" : [ {
+            "code" : "200",
+            "action" : "Inspect the ManagedTask log to identify hosts that did not reboot and handle them manually before rerunning."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 2,
+            "window_seconds" : 86400,
+            "note" : "Fleet-wide reboot"
+          },
+          "related_endpoints" : [ "/servers/reboot", "/servers/{id}/reboot", "/tasks" ],
+          "postprocessing_hint" : "Monitor host status and service health once the task completes.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -26537,6 +26868,28 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Immediately check for and apply available croit container updates.",
+          "usage" : [ "Run after adjusting auto-update settings to validate connectivity and registry credentials.", "Trigger a one-off update outside the scheduled window." ],
+          "response_shape" : "ManagedTask",
+          "failure_modes" : [ "400 if the system is configured for offline mode", "500 if the update process fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Disable offline mode or mirror the container image locally before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Review the ManagedTask log for pull/authentication errors and retry once resolved."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 4,
+            "window_seconds" : 86400,
+            "note" : "Manual update trigger"
+          },
+          "related_endpoints" : [ "/maintenance/croit-auto-update", "/tasks" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -26992,6 +27345,25 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Fetch the live Ceph manager service endpoints (dashboard, REST API, etc.).",
+          "usage" : [ "Display URLs for active mgr modules in the UI.", "Verify that mgr-managed services are reachable before automation proceeds." ],
+          "response_shape" : "map<string,string>",
+          "failure_modes" : [ "500 if the ceph command to list services fails" ],
+          "error_handling" : [ {
+            "code" : "500",
+            "action" : "Check Ceph mgr logs and ensure the mgr daemons are healthy, then retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 300,
+            "note" : "Mgr service discovery"
+          },
+          "related_endpoints" : [ "/modules", "/modules/balancer" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "viewer" ]
       }
@@ -28645,6 +29017,35 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "List namespaces available within an RBD pool.",
+          "usage" : [ "Discover namespaces before provisioning images for a tenant.", "Refresh after creating or deleting namespaces to update UI selections." ],
+          "response_shape" : "array<RbdNamespace>",
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool whose namespaces should be listed.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "404 if the pool is unknown", "200 [] when the pool has no namespaces" ],
+          "error_handling" : [ {
+            "code" : "200",
+            "action" : "Display an empty state encouraging namespace creation."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the pool list and retry with a valid name."
+          } ],
+          "retry_strategy" : "manual_refresh",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 300,
+            "note" : "Namespace discovery"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbd-namespaces/{namespace}", "/pools/{pool}/rbds" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "viewer" ]
       }
     },
@@ -28739,6 +29140,42 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Provision a dedicated namespace within a pool to group related RBD images.",
+          "usage" : [ "Call during tenant onboarding to isolate their images.", "Create staging namespaces before cloning golden images for tests." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool that will contain the namespace.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "namespace",
+            "in" : "path",
+            "description" : "Namespace identifier to create.",
+            "required" : true,
+            "example" : "tenant-a"
+          } ],
+          "failure_modes" : [ "409 if the namespace already exists", "500 if Ceph rejects the command (pool missing or insufficient permissions)" ],
+          "error_handling" : [ {
+            "code" : "409",
+            "action" : "Skip creation and reuse the existing namespace."
+          }, {
+            "code" : "500",
+            "action" : "Verify the pool name and Ceph health before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 3600,
+            "note" : "Namespace creation"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbd-namespaces", "/pools/{pool}/rbds" ],
+          "postprocessing_hint" : "Immediately refresh the namespace list or create initial images within the new namespace.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -28774,6 +29211,42 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "List RBD images in a pool (optionally including details) for inventory or UI browsing.",
+          "usage" : [ "Populate pool detail views before selecting an image to manage.", "Page through RBDs when auditing capacity or identifying stale images." ],
+          "response_shape" : "PaginationResponse<RbdImageResponse>",
+          "request_parameters" : [ {
+            "name" : "pagination",
+            "in" : "query",
+            "description" : "Optional PaginationRequest JSON controlling filters, sort order, and limits.",
+            "required" : false,
+            "example" : "{\"limit\":50,\"where\":[{\"namespace\":{\"_is_null\":true}}]}"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Name of the pool containing the images.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "404 if the pool does not exist", "200 data=[] when the pool has no images" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the pool list and retry with a valid name."
+          }, {
+            "code" : "200",
+            "action" : "Display an empty state encouraging image creation."
+          } ],
+          "retry_strategy" : "manual_refresh",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 300,
+            "note" : "RBD inventory"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}", "/pools/{pool}/rbds/{rbd}/snapshots", "/pools/{pool}/rbds/{rbd}/cache-update" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "viewer" ]
       },
@@ -28915,6 +29388,70 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Adjust metadata of an existing RBD image (rename, grow, or toggle features).",
+          "usage" : [ "Increase image size after storage expansion.", "Rename an image before migrating clients to a new naming scheme.", "Enable features such as object-map or fast-diff after ensuring client compatibility." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace of the image.",
+            "required" : false,
+            "example" : "tenant-a"
+          }, {
+            "name" : "name",
+            "in" : "body",
+            "description" : "New image name; triggers ceph rename when provided.",
+            "required" : false,
+            "example" : "vm-001-renamed"
+          }, {
+            "name" : "size",
+            "in" : "body",
+            "description" : "New size in bytes (must be >= current size).",
+            "required" : false,
+            "example" : "322122547200"
+          }, {
+            "name" : "features[]",
+            "in" : "body",
+            "description" : "Replace enabled features list.",
+            "required" : false,
+            "example" : "[\"exclusive-lock\",\"object-map\"]"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool containing the image.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Current image name.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "failure_modes" : [ "400 if the image belongs to a different pool/namespace or if a shrink is attempted", "400 if the image is still in use by Ceph iSCSI (warning escalated via ignorable warnings)", "500 if Ceph resize or rename commands fail" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Verify payload consistency and ensure the target size is >= current size before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect Ceph logs for failures, resolve the issue, then reissue the update."
+          }, {
+            "code" : "200",
+            "action" : "If you receive an ignorable warning about iSCSI usage, coordinate downtime before retrying disruptive changes."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "RBD metadata updates"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}", "/pools/{pool}/rbds/{rbd}/snapshots", "/gateways/iscsi/disks" ],
+          "postprocessing_hint" : "Force an RBD cache refresh for the image and notify dependent services of name changes.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "get" : {
@@ -28955,6 +29492,48 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Retrieve up-to-date details for a specific RBD image, bypassing caches when necessary.",
+          "usage" : [ "Inspect features, mirroring status, and snapshots before performing maintenance.", "Verify image metadata immediately after updates to confirm changes took effect." ],
+          "response_shape" : "RbdImageResponse",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace if the image is not in the default namespace.",
+            "required" : false,
+            "example" : "tenant-a"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool containing the image.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Image name to retrieve.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "failure_modes" : [ "404 if the image cannot be found", "500 if Ceph fails to return image details" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the image list and retry with the current name."
+          }, {
+            "code" : "500",
+            "action" : "Check Ceph health and retry once connectivity is restored."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 300,
+            "note" : "Image detail lookup"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds", "/pools/{pool}/rbds/{rbd}/snapshots", "/pools/{pool}/rbds/{rbd}/cache-update" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "viewer" ]
       },
@@ -29627,6 +30206,67 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Rename or change protection status for an existing RBD snapshot.",
+          "usage" : [ "Protect snapshots before exposing clones to prevent accidental deletion.", "Rename snapshots to follow retention policies after automation triggers." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace for the snapshot.",
+            "required" : false,
+            "example" : "tenant-a"
+          }, {
+            "name" : "name",
+            "in" : "body",
+            "description" : "New snapshot name.",
+            "required" : false,
+            "example" : "pre-upgrade-2024-04"
+          }, {
+            "name" : "protect",
+            "in" : "body",
+            "description" : "true to protect, false to unprotect.",
+            "required" : false,
+            "example" : "true"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool containing the snapshot.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Parent image name.",
+            "required" : true,
+            "example" : "vm-001"
+          }, {
+            "name" : "snap",
+            "in" : "path",
+            "description" : "Current snapshot name.",
+            "required" : true,
+            "example" : "pre-upgrade"
+          } ],
+          "failure_modes" : [ "404 if the snapshot cannot be found", "500 if Ceph rejects the rename/protect command or dependencies exist" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the snapshot list to confirm its presence before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Ensure dependent clones are detached and Ceph is healthy, then retry the update."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 3600,
+            "note" : "Snapshot metadata updates"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}/snapshots", "/pools/{pool}/rbds/{rbd}/snapshots/{snap}/clone" ],
+          "postprocessing_hint" : "Re-fetch snapshot details to confirm the new name or protection status.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "delete" : {
@@ -29758,6 +30398,55 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Create a point-in-time snapshot for an RBD image.",
+          "usage" : [ "Take an application-consistent snapshot prior to maintenance or upgrade steps.", "Capture a base image before cloning it to new environments." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace containing the image.",
+            "required" : false,
+            "example" : "tenant-a"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool containing the source image.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Image name to snapshot.",
+            "required" : true,
+            "example" : "vm-001"
+          }, {
+            "name" : "snap",
+            "in" : "path",
+            "description" : "Snapshot identifier to create.",
+            "required" : true,
+            "example" : "pre-upgrade"
+          } ],
+          "failure_modes" : [ "409 if a snapshot with the same name already exists", "500 if Ceph refuses to create the snapshot" ],
+          "error_handling" : [ {
+            "code" : "409",
+            "action" : "Choose a unique snapshot name or delete the existing one."
+          }, {
+            "code" : "500",
+            "action" : "Verify image accessibility and Ceph health before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 3600,
+            "note" : "Snapshot creation"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}", "/pools/{pool}/rbds/{rbd}/snapshots", "/pools/{pool}/rbds/{rbd}/snapshots/{snap}/clone" ],
+          "postprocessing_hint" : "List snapshots to confirm creation and consider protecting it if long-lived.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -30150,6 +30839,47 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Calculate provisioned and used size for a pool, namespace, or specific RBD image.",
+          "usage" : [ "Display usage data before reclaiming space or deleting snapshots.", "Assess capacity distribution across namespaces for reporting." ],
+          "response_shape" : "RbdUsedSizeResponse",
+          "request_parameters" : [ {
+            "name" : "pool",
+            "in" : "query",
+            "description" : "Pool name to query (required).",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace to scope usage calculations.",
+            "required" : false,
+            "example" : "tenant-a"
+          }, {
+            "name" : "rbd",
+            "in" : "query",
+            "description" : "Optional image name to return a single-image result.",
+            "required" : false,
+            "example" : "vm-001"
+          } ],
+          "failure_modes" : [ "404 if the pool cannot be found", "500 if Ceph usage queries fail" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Verify the pool exists before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Check Ceph health and rerun once the cluster responds to usage queries."
+          } ],
+          "retry_strategy" : "manual_refresh",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 300,
+            "note" : "Usage reporting"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds", "/pools/{pool}/rbds/{rbd}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "viewer" ]
       }
@@ -33843,6 +34573,38 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Schedule reboots for multiple servers in one request.",
+          "usage" : [ "Roll dozens of hosts after applying kernel or firmware patches.", "Automate controlled restarts during maintenance windows." ],
+          "response_shape" : "ManagedThreadTask",
+          "request_parameters" : [ {
+            "name" : "servers[]",
+            "in" : "body",
+            "description" : "Set of server IDs to reboot.",
+            "required" : true,
+            "example" : "[21,22,23]"
+          } ],
+          "failure_modes" : [ "400 if the server list is empty or contains duplicates", "404 if any referenced server IDs are invalid", "200 ManagedTask(status=FAILED) if some nodes fail to reboot" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Provide at least one unique server ID."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the server inventory and remove missing entries."
+          }, {
+            "code" : "200",
+            "action" : "Inspect the ManagedTask log to determine which servers failed and retry individually."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "Bulk reboot scheduling"
+          },
+          "related_endpoints" : [ "/servers/{id}/reboot", "/servers/{id}/shutdown", "/tasks" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -33872,6 +34634,35 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Regenerate GRUB configurations on the selected servers' boot disks.",
+          "usage" : [ "Run after modifying kernel parameters or reinstalling bootloaders.", "Execute during recovery workflows to ensure the correct boot image is selected." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "servers[]",
+            "in" : "body",
+            "description" : "List of server IDs whose boot disks should be updated.",
+            "required" : true,
+            "example" : "[12,14]"
+          } ],
+          "failure_modes" : [ "400 if the server list is empty", "200 ManagedTask(status=FAILED) if bootloader updates fail on one or more hosts" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Specify at least one server ID before retrying."
+          }, {
+            "code" : "200",
+            "action" : "Inspect the ManagedTask logs to resolve host-specific issues, then rerun for failed servers only."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 4,
+            "window_seconds" : 86400,
+            "note" : "Bootloader maintenance"
+          },
+          "related_endpoints" : [ "/servers/{id}/reboot", "/tasks" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -33912,6 +34703,67 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Update server metadata and optionally queue background tasks for image changes or hugepage reconfiguration.",
+          "usage" : [ "Rename a server or adjust its management IP after hardware changes.", "Switch the boot image or adjust hugepage reservations prior to deploying NVMe-oF/DAOS services." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "hostname",
+            "in" : "body",
+            "description" : "Optional new hostname.",
+            "required" : false,
+            "example" : "ceph-node-3"
+          }, {
+            "name" : "ip",
+            "in" : "body",
+            "description" : "Optional management IPv4 address.",
+            "required" : false,
+            "example" : "192.168.10.23"
+          }, {
+            "name" : "image",
+            "in" : "body",
+            "description" : "Image UUID or 'default' to restore defaults.",
+            "required" : false,
+            "example" : "default"
+          }, {
+            "name" : "notes",
+            "in" : "body",
+            "description" : "Operator notes displayed in the UI.",
+            "required" : false,
+            "example" : "Reserved for DR testing"
+          }, {
+            "name" : "nrHugepages",
+            "in" : "body",
+            "description" : "Number of 2MiB hugepages to configure.",
+            "required" : false,
+            "example" : "2048"
+          } ],
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier from GET /servers.",
+            "required" : true,
+            "example" : "23"
+          } ],
+          "failure_modes" : [ "404 if the server cannot be found", "400 if image validation fails or incompatible services are detected", "500 if background ManagedTask steps fail" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Review validation errors (boot disks, compatibility warnings) and adjust the payload."
+          }, {
+            "code" : "500",
+            "action" : "Inspect the ManagedTask log, resolve issues (e.g. image download failures), then rerun."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Server configuration updates"
+          },
+          "related_endpoints" : [ "/servers/{id}", "/servers/{id}/reboot", "/servers/{id}/nics" ],
+          "postprocessing_hint" : "Monitor the returned ManagedTask and reboot the server if the image was changed.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -34086,6 +34938,69 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Update per-disk metadata, assign roles, or toggle identify LEDs for maintenance workflows.",
+          "usage" : [ "Promote an unassigned disk to journal/DB/WAL after validation.", "Locate a disk in the chassis by enabling the identify LED." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "role",
+            "in" : "body",
+            "description" : "New disk role (e.g. journal).",
+            "required" : false,
+            "example" : "journal"
+          }, {
+            "name" : "partitions",
+            "in" : "body",
+            "description" : "Partition count when preparing journal disks.",
+            "required" : false,
+            "example" : "4"
+          }, {
+            "name" : "identifyLed",
+            "in" : "body",
+            "description" : "true to enable the LED, false to disable.",
+            "required" : false,
+            "example" : "true"
+          }, {
+            "name" : "notes",
+            "in" : "body",
+            "description" : "Operator notes stored with the disk.",
+            "required" : false,
+            "example" : "Installed in bay 4"
+          } ],
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "diskId",
+            "in" : "path",
+            "description" : "Disk identifier from GET /servers/{id}/disks.",
+            "required" : true,
+            "example" : "145"
+          } ],
+          "failure_modes" : [ "404 if the disk is not associated with the specified server", "400 if the disk is missing, already assigned, or the role change is not supported", "500 if LED commands or journal preparation fail" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the disk inventory and retry with correct IDs."
+          }, {
+            "code" : "400",
+            "action" : "Ensure the disk is unassigned/online and that requested roles match cluster state."
+          }, {
+            "code" : "500",
+            "action" : "Check daemon logs for LED or journal preparation failures before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 3600,
+            "note" : "Disk metadata updates"
+          },
+          "related_endpoints" : [ "/servers/{id}/disks", "/disks/wipe" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "delete" : {
@@ -34192,6 +35107,41 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Trigger an on-demand SMART data refresh for a specific disk.",
+          "usage" : [ "Pull the latest health metrics before deciding to replace a disk.", "Validate alerts from monitoring systems with real-time SMART data." ],
+          "response_shape" : "DiskSmartStatus",
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "diskId",
+            "in" : "path",
+            "description" : "Disk identifier from GET /servers/{id}/disks.",
+            "required" : true,
+            "example" : "145"
+          } ],
+          "failure_modes" : [ "404 if the server or disk cannot be resolved", "500 if the SMART refresh task fails or times out" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh server/disk inventories and retry with correct IDs."
+          }, {
+            "code" : "500",
+            "action" : "Inspect daemon task logs; ensure SMART tooling is healthy before rerunning."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 1800,
+            "note" : "SMART refresh"
+          },
+          "related_endpoints" : [ "/servers/{id}/disks", "/servers/{id}/disks/{diskId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -34306,6 +35256,61 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Create an LACP or active/passive bond on a server and migrate existing IP configuration.",
+          "usage" : [ "Call during network onboarding to aggregate multiple NICs under a single bond interface.", "Rebuild bonds after replacing physical adapters while preserving IP assignments." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "name",
+            "in" : "body",
+            "description" : "Bond interface name (≤15 characters).",
+            "required" : true,
+            "example" : "bond0"
+          }, {
+            "name" : "nics[]",
+            "in" : "body",
+            "description" : "List of NIC IDs that form the bond (minimum two).",
+            "required" : true,
+            "example" : "[101,102]"
+          }, {
+            "name" : "activePassive",
+            "in" : "body",
+            "description" : "true for active/passive (mode 1), false for LACP.",
+            "required" : false,
+            "example" : "false"
+          }, {
+            "name" : "primary",
+            "in" : "body",
+            "description" : "Primary NIC ID when activePassive=true.",
+            "required" : false,
+            "example" : "101"
+          } ],
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier from GET /servers.",
+            "required" : true,
+            "example" : "23"
+          } ],
+          "failure_modes" : [ "400 if constraints are violated (duplicate name, <2 NICs, mixed NIC types, conflicting primary)", "404 if the server or one of the NIC IDs does not exist" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Adjust the payload to satisfy bond rules—ensure NICs belong to the server and match the selected mode."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the server/NIC inventory and retry with valid identifiers."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Bond configuration"
+          },
+          "related_endpoints" : [ "/servers/{id}/nics", "/servers/{id}/nics/{nicId}/vlans" ],
+          "postprocessing_hint" : "Re-run hardware detection or networking checks to verify the bond state on the host.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34346,6 +35351,88 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Update NIC addressing, notes, MAC address, or adjust bonded NIC membership on a server.",
+          "usage" : [ "Reconfigure IPs after a network change.", "Replace a failed NIC while keeping MAC reservations up to date." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "ip",
+            "in" : "body",
+            "description" : "Optional IPv4 address (CIDR).",
+            "required" : false,
+            "example" : "192.168.120.5/24"
+          }, {
+            "name" : "ip6",
+            "in" : "body",
+            "description" : "Optional IPv6 address (CIDR).",
+            "required" : false,
+            "example" : "fd00:120::5/64"
+          }, {
+            "name" : "notes",
+            "in" : "body",
+            "description" : "Operator notes stored with the NIC.",
+            "required" : false,
+            "example" : "Connected to TOR A"
+          }, {
+            "name" : "mac",
+            "in" : "body",
+            "description" : "Override MAC when replacing hardware (server must be offline).",
+            "required" : false,
+            "example" : "02:00:5e:10:00:00"
+          }, {
+            "name" : "bond.activePassive",
+            "in" : "body",
+            "description" : "Switch bond mode between active/passive and LACP.",
+            "required" : false,
+            "example" : "true"
+          }, {
+            "name" : "bond.primary",
+            "in" : "body",
+            "description" : "Primary NIC ID when active/passive mode is selected.",
+            "required" : false,
+            "example" : "101"
+          }, {
+            "name" : "bond.nics[]",
+            "in" : "body",
+            "description" : "New list of slave NIC IDs for the bond.",
+            "required" : false,
+            "example" : "[101,102]"
+          } ],
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier from GET /servers.",
+            "required" : true,
+            "example" : "42"
+          }, {
+            "name" : "nicId",
+            "in" : "path",
+            "description" : "NIC identifier from GET /servers/{id}/nics.",
+            "required" : true,
+            "example" : "7"
+          } ],
+          "failure_modes" : [ "404 if the NIC does not belong to the server", "400 for invalid IP formats, unsupported MAC replacements, or incompatible bond settings", "500 if bonding operations fail while updating slave membership" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh NIC inventory before retrying."
+          }, {
+            "code" : "400",
+            "action" : "Ensure the server is offline for MAC changes and that bond requests follow hardware constraints."
+          }, {
+            "code" : "500",
+            "action" : "Inspect server logs for bonding errors; apply changes incrementally if needed."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 3600,
+            "note" : "NIC configuration changes"
+          },
+          "related_endpoints" : [ "/servers/{id}/nics", "/servers/{id}/nics/bonds", "/servers/{id}/nics/{nicId}/vlans" ],
+          "postprocessing_hint" : "Restart DHCP updates and verify network reachability after changes.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -34549,6 +35636,60 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Attach a tagged VLAN interface to a specific server NIC, including optional IPv4/IPv6 addresses.",
+          "usage" : [ "Provision tenant networks on dedicated NICs.", "Restore VLAN configuration after replacing network hardware." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "vlan",
+            "in" : "body",
+            "description" : "VLAN tag to assign.",
+            "required" : true,
+            "example" : "110"
+          }, {
+            "name" : "ip",
+            "in" : "body",
+            "description" : "Optional IPv4 address for the VLAN.",
+            "required" : false,
+            "example" : "10.0.110.5/24"
+          }, {
+            "name" : "ip6",
+            "in" : "body",
+            "description" : "Optional IPv6 address for the VLAN.",
+            "required" : false,
+            "example" : "fd00:110::5/64"
+          } ],
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier from GET /servers.",
+            "required" : true,
+            "example" : "42"
+          }, {
+            "name" : "nicId",
+            "in" : "path",
+            "description" : "NIC identifier returned by GET /servers/{id}/nics.",
+            "required" : true,
+            "example" : "7"
+          } ],
+          "failure_modes" : [ "400 if the IP conflicts with another interface on the server", "404 if the NIC does not belong to the server" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Choose unique IP assignments or clear conflicting addresses first."
+          }, {
+            "code" : "404",
+            "action" : "Refresh NIC inventory and retry with the correct NIC ID."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 3600,
+            "note" : "VLAN provisioning"
+          },
+          "related_endpoints" : [ "/servers/{id}/nics/{nicId}/vlans", "/servers/{id}/nics/{nicId}/vlans/{vlanId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34598,6 +35739,67 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Update VLAN tag or IP configuration for an existing VLAN interface on a NIC.",
+          "usage" : [ "Change addressing after moving the VLAN to a new subnet.", "Adjust tagging when consolidating VLAN numbering." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "vlan",
+            "in" : "body",
+            "description" : "Optional new VLAN tag.",
+            "required" : false,
+            "example" : "120"
+          }, {
+            "name" : "ip",
+            "in" : "body",
+            "description" : "Optional IPv4 address (CIDR).",
+            "required" : false,
+            "example" : "10.0.120.5/24"
+          }, {
+            "name" : "ip6",
+            "in" : "body",
+            "description" : "Optional IPv6 address (CIDR).",
+            "required" : false,
+            "example" : "fd00:120::5/64"
+          } ],
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier.",
+            "required" : true,
+            "example" : "42"
+          }, {
+            "name" : "nicId",
+            "in" : "path",
+            "description" : "NIC identifier hosting the VLAN.",
+            "required" : true,
+            "example" : "7"
+          }, {
+            "name" : "vlanId",
+            "in" : "path",
+            "description" : "VLAN record identifier.",
+            "required" : true,
+            "example" : "104"
+          } ],
+          "failure_modes" : [ "404 if the VLAN or NIC cannot be found", "400 if new IP assignments conflict with existing interfaces" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh VLAN listings before retrying."
+          }, {
+            "code" : "400",
+            "action" : "Resolve IP conflicts or choose a unique VLAN tag before reissuing the update."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 3600,
+            "note" : "VLAN updates"
+          },
+          "related_endpoints" : [ "/servers/{id}/nics/{nicId}/vlans", "/servers/{id}/nics/{nicId}" ],
+          "postprocessing_hint" : "Validate routing and DHCP settings after modifying VLAN parameters.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "delete" : {
@@ -34637,6 +35839,51 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Remove a VLAN interface from a server NIC and clean up the underlying host link if possible.",
+          "usage" : [ "Call after migrating VLAN traffic away from the interface.", "Undo temporary VLAN assignments made for maintenance tasks." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server ID owning the NIC.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "nicId",
+            "in" : "path",
+            "description" : "NIC identifier within the server.",
+            "required" : true,
+            "example" : "58"
+          }, {
+            "name" : "vlanId",
+            "in" : "path",
+            "description" : "VLAN record identifier.",
+            "required" : true,
+            "example" : "104"
+          } ],
+          "failure_modes" : [ "404 if the NIC/VLAN combination does not exist", "200 with warning if the VLAN IP is still used by a monitor service", "500 if SSH cleanup fails; VLAN entry is still removed from the database" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the VLAN list for the NIC before retrying."
+          }, {
+            "code" : "200",
+            "action" : "Acknowledge the ignorable warning and remove dependent monitor services before reassigning the IP."
+          }, {
+            "code" : "500",
+            "action" : "Manually delete the VLAN on the host (ip link del) and retry hardware detection if required."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "VLAN removal"
+          },
+          "related_endpoints" : [ "/servers/{id}/nics/{nicId}/vlans", "/servers/{id}/nics/{nicId}" ],
+          "postprocessing_hint" : "Run hardware re-detect or reapply network configuration to confirm the VLAN disappeared on the host.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34662,6 +35909,32 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Schedule an immediate reboot of the specified server via the croit agent.",
+          "usage" : [ "Restart a node after applying configuration changes.", "Recover a machine that requires a manual reboot outside of rolling operations." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier from GET /servers.",
+            "required" : true,
+            "example" : "23"
+          } ],
+          "failure_modes" : [ "404 if the server cannot be found" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the server list and retry with a valid ID."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Manual server reboot"
+          },
+          "related_endpoints" : [ "/servers/{id}/shutdown", "/servers/reboot" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34686,6 +35959,32 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Trigger the agent to rescan hardware (NICs, disks, etc.) for the specified server.",
+          "usage" : [ "Refresh inventory after physically swapping components.", "Revalidate hardware information when monitoring detects discrepancies." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier.",
+            "required" : true,
+            "example" : "23"
+          } ],
+          "failure_modes" : [ "404 if the server cannot be found" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the server inventory before retrying."
+          } ],
+          "retry_strategy" : "manual_refresh",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 1800,
+            "note" : "Hardware re-detect"
+          },
+          "related_endpoints" : [ "/servers/{id}/nics", "/servers/{id}/disks" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "viewer" ]
       }
@@ -34866,6 +36165,33 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Gracefully shut down a server through the croit agent and mark it as shutting down.",
+          "usage" : [ "Power off a node before hardware maintenance.", "Prepare servers for planned outages after migrating workloads." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier from GET /servers.",
+            "required" : true,
+            "example" : "23"
+          } ],
+          "failure_modes" : [ "404 if the server cannot be found" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the server inventory and retry with a valid ID."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Manual server shutdown"
+          },
+          "related_endpoints" : [ "/servers/{id}/reboot", "/servers/reboot" ],
+          "postprocessing_hint" : "Update runbooks to reflect that the server is offline and monitor for daemon task completion.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -35675,6 +37001,45 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Run a simple SSH connectivity test against the specified server (optionally with retries).",
+          "usage" : [ "Diagnose SSH access issues before scheduling tasks that require remote commands.", "Measure whether retry logic is needed for unstable connections." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "sleep",
+            "in" : "query",
+            "description" : "Sleep duration (seconds) per iteration to simulate work.",
+            "required" : false,
+            "example" : "1"
+          }, {
+            "name" : "retry",
+            "in" : "query",
+            "description" : "true to use the retry-enabled SSH client.",
+            "required" : false,
+            "example" : "true"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Server identifier from GET /servers.",
+            "required" : true,
+            "example" : "23"
+          } ],
+          "failure_modes" : [ "404 if the server cannot be found", "500 if SSH connection attempts fail" ],
+          "error_handling" : [ {
+            "code" : "500",
+            "action" : "Review server reachability, credentials, and logs before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "SSH diagnostics"
+          },
+          "related_endpoints" : [ "/servers/{id}/reboot", "/servers/{id}/redetect" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "viewer" ]
       }

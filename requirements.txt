@@ -1,3 +1,4 @@
 mcp
 aiohttp
 requests
+websockets>=12.0

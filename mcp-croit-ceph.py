@@ -24,6 +24,18 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Import log search tools
+try:
+    from croit_log_tools import (
+        handle_log_search,
+        handle_log_monitor,
+        LOG_SEARCH_TOOLS
+    )
+    LOG_TOOLS_AVAILABLE = True
+except ImportError:
+    logger.warning("croit_log_tools module not found, log search features disabled")
+    LOG_TOOLS_AVAILABLE = False
+
 # Try to import token_optimizer, fall back gracefully if not available
 try:
     from token_optimizer import TokenOptimizer
@@ -84,6 +96,7 @@ class CroitCephServer:
         max_category_tools=40,  # Maximum number of category tools to generate (40 covers all current categories)
         min_endpoints_per_category=1,  # Minimum endpoints needed for a category tool (include single-endpoint categories like logs)
         openapi_file=None,  # Optional: Use local OpenAPI spec file instead of fetching from server
+        enable_log_tools=True,  # Enable advanced log search tools
     ):
         # tools is a map of tool name (as given to and later provided by the LLM) to the tool info.
         # Each endpoint is represented in this map as a tool.
@@ -103,6 +116,8 @@ class CroitCephServer:
         self.category_endpoints = {}
         # session is later used to make the actual API calls to the cluster.
         self.session = aiohttp.ClientSession()
+        # Enable log search tools
+        self.enable_log_tools = enable_log_tools and LOG_TOOLS_AVAILABLE
 
         # Handle backwards compatibility
         if endpoints_as_tools:
@@ -158,6 +173,10 @@ Use get_reference_schema to get more info on the schema for endpoints.
 Use call_api_endpoint to then call one of the endpoints.
 Many endpoints offer pagination. When available, use it to refine the query.
                     """
+
+        # Add log search tools if enabled (works in all modes)
+        if self.enable_log_tools:
+            self._add_log_search_tools()
 
         self.server = Server("mcp-croit-ceph")
         # These functions create decorators to register the handlers.
@@ -1031,6 +1050,20 @@ Valid filter ops are:
             ),
         ]
 
+    def _add_log_search_tools(self):
+        """Add log search tools to the available tools"""
+        if not LOG_TOOLS_AVAILABLE:
+            return
+
+        for tool_def in LOG_SEARCH_TOOLS:
+            tool = types.Tool(
+                name=tool_def["name"],
+                description=tool_def["description"],
+                inputSchema=tool_def["inputSchema"]
+            )
+            self.mcp_tools.append(tool)
+            logger.info(f"Added log search tool: {tool_def['name']}")
+
     async def handle_list_tools(self) -> List[types.Tool]:
         """Return available tools."""
         logger.info(f"Providing {len(self.mcp_tools)} tools")
@@ -1046,6 +1079,34 @@ Valid filter ops are:
         Each tool is mapped to a specific API endpoint.
         """
         logger.info(f"Tool call {name} with args {arguments}")
+
+        # Handle log search tools
+        if self.enable_log_tools:
+            if name == "croit_log_search":
+                # Extract host and port from self.host
+                import re
+                match = re.match(r'https?://([^:]+):?(\d+)?', self.host)
+                if match:
+                    host = match.group(1)
+                    port = int(match.group(2)) if match.group(2) else 8080
+                else:
+                    host = self.host
+                    port = 8080
+
+                return await handle_log_search(arguments, host, port)
+
+            elif name == "croit_log_monitor":
+                # Extract host and port from self.host
+                import re
+                match = re.match(r'https?://([^:]+):?(\d+)?', self.host)
+                if match:
+                    host = match.group(1)
+                    port = int(match.group(2)) if match.group(2) else 8080
+                else:
+                    host = self.host
+                    port = 8080
+
+                return await handle_log_monitor(arguments, host, port)
         if name == self.resolve_references_tool:
             resolved = self._resolve_reference_schema(
                 ref_path=arguments["reference_path"]
