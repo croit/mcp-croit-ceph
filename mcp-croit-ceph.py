@@ -335,7 +335,28 @@ Valid filter ops are:
                     )
                 if not description:
                     description = f"{method.upper()} {path}"
-                description = description[:500]
+
+                # Add examples from x-llm-hints if available
+                llm_hints = operation.get("x-llm-hints", {})
+                if "request_examples" in llm_hints:
+                    examples = llm_hints["request_examples"]
+                    if examples:
+                        description += "\n\nExample request:"
+                        # Take first example for brevity
+                        example = examples[0] if isinstance(examples, list) else examples
+                        if isinstance(example, dict) and "example" in example:
+                            import json
+                            description += f"\n```json\n{json.dumps(example['example'], indent=2)}\n```"
+                        elif isinstance(example, str):
+                            description += f"\n```json\n{example}\n```"
+
+                # Add parameter details if available
+                if "parameter_details" in llm_hints:
+                    description += "\n\nParameter details:"
+                    for param, detail in llm_hints["parameter_details"].items():
+                        description += f"\n- {param}: {detail}"
+
+                description = description[:1000]  # Increased limit for examples
 
                 parameters = self._build_parameters_schema(operation)
                 # Specifying the output schema means it must be correct.
@@ -487,6 +508,73 @@ Valid filter ops are:
         # The description tends to be outside of the OpenAPI schema in a description field.
         if schema.get("description", "") == "":
             schema["description"] = openapi_schema.get("description", "")
+
+        # Recursively resolve $ref references and add examples
+        schema = self._resolve_refs_in_schema(schema)
+
+        return schema
+
+    def _resolve_refs_in_schema(self, schema: Dict, depth: int = 0, seen_refs: set = None) -> Dict:
+        """
+        Recursively resolve $ref references in a schema and add inline documentation.
+        """
+        if depth > 10:  # Prevent infinite recursion
+            return schema
+
+        if seen_refs is None:
+            seen_refs = set()
+
+        # If this is a $ref, resolve it
+        if "$ref" in schema:
+            ref = schema["$ref"]
+            if ref in seen_refs:
+                # Circular reference detected
+                return {"type": "object", "description": f"Circular reference to {ref}"}
+
+            seen_refs.add(ref)
+            resolved = self._resolve_reference_schema(ref)
+
+            # Keep the original description if present
+            if "description" in schema:
+                resolved = resolved.copy()
+                resolved["description"] = schema["description"]
+
+            # Continue resolving in the resolved schema
+            return self._resolve_refs_in_schema(resolved, depth + 1, seen_refs)
+
+        # Process nested schemas
+        if "properties" in schema:
+            resolved_props = {}
+            for prop_name, prop_schema in schema["properties"].items():
+                resolved_props[prop_name] = self._resolve_refs_in_schema(prop_schema, depth + 1, seen_refs.copy())
+            schema = schema.copy()
+            schema["properties"] = resolved_props
+
+        if "items" in schema:
+            schema = schema.copy()
+            schema["items"] = self._resolve_refs_in_schema(schema["items"], depth + 1, seen_refs.copy())
+
+        if "anyOf" in schema:
+            schema = schema.copy()
+            schema["anyOf"] = [
+                self._resolve_refs_in_schema(s, depth + 1, seen_refs.copy())
+                for s in schema["anyOf"]
+            ]
+
+        if "oneOf" in schema:
+            schema = schema.copy()
+            schema["oneOf"] = [
+                self._resolve_refs_in_schema(s, depth + 1, seen_refs.copy())
+                for s in schema["oneOf"]
+            ]
+
+        if "allOf" in schema:
+            schema = schema.copy()
+            schema["allOf"] = [
+                self._resolve_refs_in_schema(s, depth + 1, seen_refs.copy())
+                for s in schema["allOf"]
+            ]
+
         return schema
 
     def _analyze_api_structure(self):
