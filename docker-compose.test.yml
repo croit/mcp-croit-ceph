@@ -1,0 +1,27 @@
+version: '3.8'
+
+services:
+  mcp-croit-ceph-test:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: mcp-croit-test
+    environment:
+      # Croit API credentials
+      CROIT_HOST: "${CROIT_HOST}"
+      CROIT_API_TOKEN: "${CROIT_API_TOKEN}"
+      # MCP arguments for different test scenarios
+      MCP_ARGS: "--mode hybrid --openapi-file /config/openapi.json --no-permission-check"
+    volumes:
+      # Mount local OpenAPI spec
+      - ./openapi.json:/config/openapi.json:ro
+      # Optional: Mount config file instead of env vars
+      # - ./config.json:/config/config.json:ro
+    ports:
+      # If you want to test with a local MCP client
+      - "3000:3000"
+    stdin_open: true
+    tty: true
+    # Override entrypoint for debugging if needed
+    # entrypoint: /bin/bash
+    # command: -c "python /app/mcp-croit-ceph.py --help"

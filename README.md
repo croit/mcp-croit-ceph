@@ -2,6 +2,14 @@
 
 An MCP (Model Context Protocol) server for interacting with Croit Ceph clusters through their REST API.
 
+## Current Status
+
+- **580** total API endpoints
+- **132** endpoints with x-llm-hints (22.8% coverage)
+- **100%** endpoints have summaries
+- **13** tools in hybrid mode (97% reduction)
+- **Full support** for all x-llm-hints fields
+
 ## Features
 
 ### Hybrid Mode (Default) - 97% Fewer Tools!
@@ -26,9 +34,10 @@ This dramatic reduction improves:
 ### Dynamic Features
 
 - **Automatic API Discovery**: Fetches OpenAPI spec from your Croit cluster
-- **Permission-Based Filtering**: Only shows tools for accessible API categories
+- **Permission-Based Filtering**: Role-based tool filtering (ADMIN vs VIEWER)
+- **Full x-llm-hints Support**: 132+ endpoints with AI optimization hints
+- **Local OpenAPI Support**: Use a local OpenAPI spec file for testing/development
 - **Schema Resolution**: Handles `$ref` references automatically
-- **Local OpenAPI Support**: Use a local OpenAPI spec file for offline development
 
 ## Installation
 
@@ -204,17 +213,54 @@ The server implements the standard MCP protocol and works with any compatible cl
 | `--no-resolve-references` | Don't resolve $ref in spec | False (resolve enabled) |
 | `--offer-whole-spec` | Include full spec in list tool | False |
 
+## Docker Usage
+
+### Build and Run with Docker
+
+```bash
+# Build the Docker image
+docker build -t mcp-croit-ceph .
+
+# Run with environment variables
+docker run -it --rm \
+  -e CROIT_HOST="https://your-cluster" \
+  -e CROIT_API_TOKEN="your-token" \
+  mcp-croit-ceph
+
+# Run with local OpenAPI spec (for testing)
+docker run -it --rm \
+  -v $(pwd)/openapi.json:/config/openapi.json:ro \
+  -e CROIT_HOST="http://dummy" \
+  -e CROIT_API_TOKEN="dummy" \
+  mcp-croit-ceph \
+  --mode hybrid --openapi-file /config/openapi.json --no-permission-check
+```
+
+### Docker Compose
+
+```yaml
+version: '3.8'
+services:
+  mcp-croit-ceph:
+    image: mcp-croit-ceph:latest
+    environment:
+      CROIT_HOST: "${CROIT_HOST}"
+      CROIT_API_TOKEN: "${CROIT_API_TOKEN}"
+      MCP_ARGS: "--mode hybrid"
+    volumes:
+      # Optional: Use local OpenAPI spec
+      - ./openapi.json:/config/openapi.json:ro
+```
+
 ## Development
 
 ### Testing Tool Count
 
 ```bash
-# Check how many tools will be generated
-python -c "
-from mcp_croit_ceph import CroitCephServer
-server = CroitCephServer(mode='hybrid')
-print(f'Tool count: {len(server.mcp_tools)}')
-"
+# Check how many tools will be generated in each mode
+for mode in hybrid base_only categories_only; do
+  echo "$mode: $(python mcp-croit-ceph.py --mode $mode --openapi-file openapi.json --no-permission-check 2>&1 | grep -o 'Generated [0-9]* tools')"
+done
 ```
 
 ### Debug Logging
@@ -223,6 +269,16 @@ print(f'Tool count: {len(server.mcp_tools)}')
 # Enable debug logging
 export LOG_LEVEL=DEBUG
 python mcp-croit-ceph.py
+```
+
+### Testing with Local OpenAPI Spec
+
+```bash
+# Use the test script
+./test-local.sh
+
+# Or manually test different modes
+python mcp-croit-ceph.py --mode hybrid --openapi-file openapi.json --no-permission-check
 ```
 
 ## License
