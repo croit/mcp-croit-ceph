@@ -23273,6 +23273,76 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Update NVMe-oF service metadata, ANA state, transports, listeners, or hugepage settings.",
+          "usage" : [ "Modify service parameters after hardware or configuration changes.", "Adjust ANA state or listener definitions as part of maintenance." ],
+          "response_shape" : "ManagedThreadTask",
+          "request_parameters" : [ {
+            "name" : "description",
+            "in" : "body",
+            "description" : "Optional user-facing description for the service.",
+            "required" : false,
+            "example" : "NVMe-oF target on node12"
+          }, {
+            "name" : "nrHugepages",
+            "in" : "body",
+            "description" : "Desired hugepage allocation for the server.",
+            "required" : false,
+            "example" : "4096"
+          }, {
+            "name" : "anaState",
+            "in" : "body",
+            "description" : "ANA state to apply to all listeners.",
+            "required" : false,
+            "example" : "optimized"
+          }, {
+            "name" : "transports",
+            "in" : "body",
+            "description" : "Full list of transport configs to replace existing ones.",
+            "required" : false,
+            "example" : "[{\"type\":\"TCP\",\"maxIoSize\":1048576}]"
+          }, {
+            "name" : "listeners",
+            "in" : "body",
+            "description" : "Listener definitions to overwrite current configuration.",
+            "required" : false,
+            "example" : "[{\"type\":\"TCP\",\"nicId\":101,\"port\":4420}]"
+          } ],
+          "path_parameters" : [ {
+            "name" : "gatewayId",
+            "in" : "path",
+            "description" : "NVMe-oF gateway cluster ID.",
+            "required" : true,
+            "example" : "7"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service ID within the gateway.",
+            "required" : true,
+            "example" : "42"
+          } ],
+          "failure_modes" : [ "400 if requested ANA state is invalid or listeners reference unsupported NICs", "404 if the gateway or service ID is unknown", "500 if nvmeof-target reconfiguration fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Validate requested parameters against cluster policy (forceSecure, NIC availability)."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the service list and retry with current IDs."
+          }, {
+            "code" : "500",
+            "action" : "Inspect nvmeof-target logs, resolve errors, then resubmit the update."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "NVMe-oF service reconfiguration"
+          },
+          "related_endpoints" : [ "/gateways/nvmeof/services", "/gateways/nvmeof/{gatewayId}/services/{serviceId}/listeners" ],
+          "postprocessing_hint" : "Poll GET /gateways/nvmeof/services to ensure updated settings are reflected before proceeding.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -23305,6 +23375,39 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Clear cached NVMe-oF service configuration errors after they have been addressed.",
+          "usage" : [ "Call once operators have fixed the reported misconfiguration and want the dashboard to reset.", "Use to acknowledge resolved errors before triggering a fresh service rescan." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "gatewayId",
+            "in" : "path",
+            "description" : "NVMe-oF gateway cluster ID.",
+            "required" : true,
+            "example" : "7"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service ID whose error cache should be cleared.",
+            "required" : true,
+            "example" : "42"
+          } ],
+          "failure_modes" : [ "404 if the service record no longer exists" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the service list; recreate the service if it was deleted."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "NVMe-oF error acknowledgements"
+          },
+          "related_endpoints" : [ "/gateways/nvmeof/services" ],
+          "postprocessing_hint" : "Re-query GET /gateways/nvmeof/services to confirm the error array is empty.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -23353,6 +23456,76 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Create an NVMe-oF listener bound to a specific NIC/VLAN for a target service.",
+          "usage" : [ "Call when onboarding new fabrics or scaling out access points for an NVMe-oF service.", "Use right after provisioning additional NICs to expose the service on the new network segment." ],
+          "response_shape" : "ManagedThreadTask",
+          "request_parameters" : [ {
+            "name" : "body.type",
+            "in" : "body",
+            "description" : "Transport type (TCP, RDMA, etc.).",
+            "required" : true,
+            "example" : "TCP"
+          }, {
+            "name" : "body.nicId",
+            "in" : "body",
+            "description" : "NIC ID to bind the listener to.",
+            "required" : true,
+            "example" : "101"
+          }, {
+            "name" : "body.vlanId",
+            "in" : "body",
+            "description" : "Optional VLAN ID for tagged listeners.",
+            "required" : false,
+            "example" : "12"
+          }, {
+            "name" : "body.port",
+            "in" : "body",
+            "description" : "Override port; null falls back to cluster default.",
+            "required" : false,
+            "example" : "4420"
+          }, {
+            "name" : "body.secure",
+            "in" : "body",
+            "description" : "Set true to request TLS, subject to cluster policy.",
+            "required" : false,
+            "example" : "false"
+          } ],
+          "path_parameters" : [ {
+            "name" : "gatewayId",
+            "in" : "path",
+            "description" : "NVMe-oF gateway cluster ID.",
+            "required" : true,
+            "example" : "7"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service identifier within the gateway.",
+            "required" : true,
+            "example" : "42"
+          } ],
+          "failure_modes" : [ "400 if NIC validation fails or the request would break security policy", "404 if the gateway or service ID is invalid", "500 if nvmeof-target configuration fails during apply" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Verify the NIC belongs to the service server and adjust VLAN/security settings."
+          }, {
+            "code" : "404",
+            "action" : "Refresh services/listeners lists and retry with current IDs."
+          }, {
+            "code" : "500",
+            "action" : "Check nvmeof-target logs on the host, resolve errors, then rerun."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 600,
+            "note" : "NVMe-oF listener creation"
+          },
+          "related_endpoints" : [ "/gateways/nvmeof/listeners", "/gateways/nvmeof/{gatewayId}/services/{serviceId}/listeners/{listenerId}" ],
+          "postprocessing_hint" : "Poll GET /gateways/nvmeof/listeners to verify the listener appears with the expected NIC/VLAN.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -23410,6 +23583,64 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Adjust port or TLS settings for an existing NVMe-oF listener.",
+          "usage" : [ "Modify listener ports during maintenance without recreating the listener.", "Enable or disable TLS when policy changes." ],
+          "response_shape" : "ManagedThreadTask",
+          "request_parameters" : [ {
+            "name" : "port",
+            "in" : "body",
+            "description" : "Optional port override; null keeps the existing value.",
+            "required" : false,
+            "example" : "4420"
+          }, {
+            "name" : "secure",
+            "in" : "body",
+            "description" : "Optional TLS flag.",
+            "required" : false,
+            "example" : "true"
+          } ],
+          "path_parameters" : [ {
+            "name" : "gatewayId",
+            "in" : "path",
+            "description" : "NVMe-oF gateway cluster ID.",
+            "required" : true,
+            "example" : "7"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service ID owning the listener.",
+            "required" : true,
+            "example" : "42"
+          }, {
+            "name" : "listenerId",
+            "in" : "path",
+            "description" : "Listener identifier to update.",
+            "required" : true,
+            "example" : "5"
+          } ],
+          "failure_modes" : [ "400 if enabling TLS violates cluster security restrictions", "404 if the gateway/service/listener combination is invalid", "500 if nvmeof-target fails to reconfigure the listener" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Respect forceSecure policy and ensure TLS prerequisites are met."
+          }, {
+            "code" : "404",
+            "action" : "Refresh listener inventory and retry with current IDs."
+          }, {
+            "code" : "500",
+            "action" : "Inspect nvmeof-target logs, resolve errors, then rerun the update."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "NVMe-oF listener updates"
+          },
+          "related_endpoints" : [ "/gateways/nvmeof/listeners", "/gateways/nvmeof/{gatewayId}/services/{serviceId}" ],
+          "postprocessing_hint" : "Re-query GET /gateways/nvmeof/listeners to confirm new port/TLS state.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "delete" : {
@@ -23455,6 +23686,48 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Remove an NVMe-oF listener so the service stops exposing that network endpoint.",
+          "usage" : [ "Call during listener maintenance (e.g. decommissioning a NIC or VLAN).", "Use ahead of recreating the listener with new parameters to avoid duplicate bindings." ],
+          "response_shape" : "ManagedThreadTask",
+          "path_parameters" : [ {
+            "name" : "gatewayId",
+            "in" : "path",
+            "description" : "NVMe-oF gateway cluster ID.",
+            "required" : true,
+            "example" : "7"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Target service that owns the listener.",
+            "required" : true,
+            "example" : "42"
+          }, {
+            "name" : "listenerId",
+            "in" : "path",
+            "description" : "Listener identifier as returned by the listeners API.",
+            "required" : true,
+            "example" : "5"
+          } ],
+          "failure_modes" : [ "404 if the gateway, service, or listener cannot be found", "500 if nvmeof-target fails to reconfigure after removal" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh listeners for the service to obtain current IDs, then retry."
+          }, {
+            "code" : "500",
+            "action" : "Check nvmeof-target tasks on the server and rerun once they finish successfully."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 300,
+            "note" : "NVMe-oF listener removal"
+          },
+          "related_endpoints" : [ "/gateways/nvmeof/listeners", "/gateways/nvmeof/services" ],
+          "postprocessing_hint" : "Refresh GET /gateways/nvmeof/listeners to ensure the listener ID disappears.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -23502,6 +23775,48 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Remove a custom NVMe-oF transport configuration so the service falls back to cluster defaults.",
+          "usage" : [ "Call after reverting transport tuning or decommissioning a transport type from the service.", "Use before recreating the transport with new parameters to avoid conflicting overrides." ],
+          "response_shape" : "ManagedThreadTask",
+          "path_parameters" : [ {
+            "name" : "gatewayId",
+            "in" : "path",
+            "description" : "Numeric identifier of the NVMe-oF gateway cluster.",
+            "required" : true,
+            "example" : "7"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Internal service ID within the gateway.",
+            "required" : true,
+            "example" : "42"
+          }, {
+            "name" : "type",
+            "in" : "path",
+            "description" : "Transport to remove (TCP, RDMA, etc.).",
+            "required" : true,
+            "example" : "TCP"
+          } ],
+          "failure_modes" : [ "404 if the gateway or service ID is invalid", "500 if the gateway fails to reconfigure after deleting the transport" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the NVMe-oF service list and verify you are using current IDs before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect nvmeof-target logs, resolve deployment issues, then rerun the deletion."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 300,
+            "note" : "NVMe-oF transport removal"
+          },
+          "related_endpoints" : [ "/gateways/nvmeof/services", "/gateways/nvmeof/{gatewayId}/services/{serviceId}/transports" ],
+          "postprocessing_hint" : "Poll GET /gateways/nvmeof/services to confirm the service no longer lists the transport override.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -33658,6 +33973,41 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Detach a service instance from a specific server, optionally triggering managed removal tasks.",
+          "usage" : [ "Remove a service from a node prior to decommissioning the server.", "Force-stop a misbehaving service by removing it from the host." ],
+          "response_shape" : "ManagedTask?",
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server ID hosting the service.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service ID assigned to the server.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if either the server or service mapping is unknown", "409 if the service manager refuses the removal because another operation holds the lock" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh GET /servers/{id}/services to confirm the mapping before retrying."
+          }, {
+            "code" : "409",
+            "action" : "Wait for other service control tasks to finish, then reissue the deletion."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "Server service removal"
+          },
+          "related_endpoints" : [ "/services/{id}/stop", "/services/{id}/start", "/services" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -33744,6 +34094,38 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Deploy a CephFS metadata server (MDS) on the specified host.",
+          "usage" : [ "Scale CephFS metadata capacity by adding another MDS daemon.", "Recreate an MDS after host replacement." ],
+          "response_shape" : "ManagedTask",
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Server ID that will run the MDS daemon.",
+            "required" : true,
+            "example" : "25"
+          } ],
+          "failure_modes" : [ "400 if an MDS already runs on the server or CephFS setup blocks provisioning", "404 if the server ID cannot be found", "500 if key creation or daemon start fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure the server is not already hosting an MDS and CephFS pools are ready."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the server list before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect ManagedTask logs and fix host issues prior to reattempting."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "MDS provisioning"
+          },
+          "related_endpoints" : [ "/servers/{serverId}/services/{serviceId}/start", "/services/{id}/restart" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -33784,6 +34166,51 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Deploy a Ceph monitor on the specified server, provisioning keys and optional disk wiping.",
+          "usage" : [ "Scale out the monitor quorum when adding new nodes.", "Redeploy a monitor after replacing hardware." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "ip",
+            "in" : "body",
+            "description" : "IPv4 address for the monitor to bind to.",
+            "required" : true,
+            "example" : "192.168.10.11"
+          }, {
+            "name" : "diskId",
+            "in" : "body",
+            "description" : "Disk ID used for the monitor store; will be wiped if necessary.",
+            "required" : true,
+            "example" : "104"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Server ID that should host the monitor.",
+            "required" : true,
+            "example" : "23"
+          } ],
+          "failure_modes" : [ "400 if Ceph is not yet configured or a duplicate monitor exists", "404 if the server or disk ID is invalid", "500 if key creation or service start fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Deploy the initial monitor first or remove existing monitor instances."
+          }, {
+            "code" : "404",
+            "action" : "Refresh server/disk inventories before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Review the ManagedTask log, resolve host issues, then rerun."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "Monitor provisioning"
+          },
+          "related_endpoints" : [ "/servers/{serverId}/services/{serviceId}/start", "/services/{id}/restart" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -33815,6 +34242,38 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Deploy an rbd-mirror daemon on the specified server, including keyring creation.",
+          "usage" : [ "Provision replication capacity between clusters by adding mirror daemons.", "Recreate a mirror daemon after node recovery." ],
+          "response_shape" : "ManagedTask",
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Server ID that will run rbd-mirror.",
+            "required" : true,
+            "example" : "31"
+          } ],
+          "failure_modes" : [ "400 if a mirror daemon already exists on the server or required packages are missing", "404 if the server ID cannot be resolved", "500 if key creation or daemon start fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure rbd-mirror is installed and no other mirror service exists on the host."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the server list and retry."
+          }, {
+            "code" : "500",
+            "action" : "Inspect the ManagedTask log to resolve host issues before rerunning."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "rbd-mirror provisioning"
+          },
+          "related_endpoints" : [ "/servers/{serverId}/services/{serviceId}/start", "/services/{id}/restart" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -34211,6 +34670,54 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Provision the single supported iSCSI gateway cluster and deploy ceph-iscsi gateways on selected servers.",
+          "usage" : [ "Call during initial setup to instantiate the iSCSI control plane.", "Use after wiping an old deployment (servers rebooted) to recreate the gateway." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "servers[].serverId",
+            "in" : "body",
+            "description" : "Server ID to host the gateway instance.",
+            "required" : true,
+            "example" : "101"
+          }, {
+            "name" : "servers[].ip",
+            "in" : "body",
+            "description" : "Client-facing IP already configured on the server.",
+            "required" : true,
+            "example" : "192.168.10.50"
+          }, {
+            "name" : "description",
+            "in" : "body",
+            "description" : "Optional display name for the gateway.",
+            "required" : false,
+            "example" : "Primary iSCSI cluster"
+          } ],
+          "failure_modes" : [ "400 if CephFS is not configured or a second gateway is attempted", "404 if any referenced server ID does not exist", "409 if another creation task is currently running", "500 if Ceph pool or ceph-iscsi provisioning fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Configure CephFS and ensure only one gateway is defined before retrying."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the server inventory and submit only managed server IDs."
+          }, {
+            "code" : "409",
+            "action" : "Wait for the existing creation task to finish; retry if it failed."
+          }, {
+            "code" : "500",
+            "action" : "Inspect task logs, reboot gateway servers if necessary, then re-run the creation."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 2,
+            "window_seconds" : 86400,
+            "note" : "iSCSI cluster provisioning"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}", "/services/iscsi/{serviceId}/servers/{hostname}", "/services/iscsi/{serviceId}/disks" ],
+          "postprocessing_hint" : "Monitor the ManagedTask output; once complete, verify gateway health via GET /services/iscsi.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34243,6 +34750,39 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Update mutable metadata on the iSCSI gateway service (currently the description).",
+          "usage" : [ "Rename the gateway in the UI after reassigning responsibilities.", "Clarify the service description following infrastructure changes." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "description",
+            "in" : "body",
+            "description" : "Optional new description shown to operators.",
+            "required" : false,
+            "example" : "Production iSCSI service"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "iSCSI service ID to update.",
+            "required" : true,
+            "example" : "1"
+          } ],
+          "failure_modes" : [ "404 if the service ID cannot be found" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh GET /services/iscsi to confirm the service still exists before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "iSCSI metadata update"
+          },
+          "related_endpoints" : [ "/services/iscsi", "/services/iscsi/{serviceId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -34297,6 +34837,36 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Tear down the iSCSI gateway service and purge its Ceph-side configuration.",
+          "usage" : [ "Invoke when decommissioning the iSCSI deployment or migrating to new hardware.", "Use before recreating the gateway to ensure no residual configuration remains." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service identifier as returned by GET /services/iscsi.",
+            "required" : true,
+            "example" : "1"
+          } ],
+          "failure_modes" : [ "404 if the service ID no longer exists", "500 if another operation currently modifies the gateway or Ceph config cleanup fails" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the iSCSI service list and retry only if the gateway still exists."
+          }, {
+            "code" : "500",
+            "action" : "Wait for concurrent tasks to finish, inspect server logs, then retry the deletion."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 3,
+            "window_seconds" : 3600,
+            "note" : "iSCSI gateway removal"
+          },
+          "related_endpoints" : [ "/services/iscsi", "/services/iscsi/{serviceId}/servers/{hostname}" ],
+          "postprocessing_hint" : "Inform operators that affected servers must be rebooted before provisioning a new gateway.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "post" : {
@@ -34335,6 +34905,52 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Scale out the iSCSI gateway by adding another server with its client-facing IP.",
+          "usage" : [ "Use when onboarding a new gateway node to increase throughput.", "Call after replacing hardware to reinstate the node into the gateway cluster." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "serverId",
+            "in" : "body",
+            "description" : "Server ID being added to the gateway.",
+            "required" : true,
+            "example" : "102"
+          }, {
+            "name" : "ip",
+            "in" : "body",
+            "description" : "Client-facing IP already configured on the server.",
+            "required" : true,
+            "example" : "192.168.10.51"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Existing iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          } ],
+          "failure_modes" : [ "404 if the service or server ID is unknown", "409 if ceph-iscsi reports the gateway is already defined on the host", "500 if starting the gateway daemon or reconfiguring peers fails" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Fetch the current gateway and server list, then retry with valid IDs."
+          }, {
+            "code" : "409",
+            "action" : "Ensure the server was rebooted after previous deletions and retry once the daemon is stopped."
+          }, {
+            "code" : "500",
+            "action" : "Inspect the ManagedTask log for details; address host issues before re-running."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "iSCSI gateway scaling"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/servers/{hostname}", "/services/iscsi/{serviceId}/disks" ],
+          "postprocessing_hint" : "After success, run GET /services/iscsi/{serviceId} to confirm the new server appears and is healthy.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34366,6 +34982,42 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Remove an iSCSI client definition and revoke its access credentials.",
+          "usage" : [ "Call when retiring a host that should no longer access exported LUNs.", "Use before recreating the client with new CHAP secrets to avoid duplicates." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Owning iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "name",
+            "in" : "path",
+            "description" : "Client name/IQN as shown in the gateway configuration.",
+            "required" : true,
+            "example" : "iqn.1993-08.org.debian:01:client01"
+          } ],
+          "failure_modes" : [ "404 if the service or client name cannot be found", "500 if the gateway rejects the deletion request" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh GET /services/iscsi/{serviceId} to confirm current clients before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Verify gateway connectivity and logs, then retry once the control plane is healthy."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "iSCSI client removal"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}", "/services/iscsi/{serviceId}/clients/{name}/disks" ],
+          "postprocessing_hint" : "Re-run GET /services/iscsi/{serviceId} to confirm the client entry is gone.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -34405,6 +35057,63 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Create an iSCSI client entry (CHAP credentials plus optional host group assignment).",
+          "usage" : [ "Add a new initiator to access exported LUNs.", "Recreate a client with fresh credentials during onboarding." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "username",
+            "in" : "body",
+            "description" : "CHAP username (8-64 chars).",
+            "required" : true,
+            "example" : "client-user"
+          }, {
+            "name" : "password",
+            "in" : "body",
+            "description" : "CHAP secret (12-16 chars).",
+            "required" : true,
+            "example" : "Sup3rS3cret123"
+          }, {
+            "name" : "group",
+            "in" : "body",
+            "description" : "Optional host group to auto-assign.",
+            "required" : false,
+            "example" : "prod-nodes"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Owning iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "name",
+            "in" : "path",
+            "description" : "Desired client name or IQN.",
+            "required" : true,
+            "example" : "iqn.1993-08.org.debian:01:newhost"
+          } ],
+          "failure_modes" : [ "400 if the credentials fail validation or host group assignment is invalid", "404 if the service ID is unknown", "500 if the gateway cannot create the client" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure username/password meet length requirements and host group exists."
+          }, {
+            "code" : "404",
+            "action" : "Refresh GET /services/iscsi to confirm the service ID."
+          }, {
+            "code" : "500",
+            "action" : "Check iscsi-gateway logs; delete any partial client and retry once healthy."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "iSCSI client creation"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/clients/{name}", "/services/iscsi/{serviceId}/clients/{name}/disks" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "patch" : {
@@ -34443,6 +35152,54 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Rotate CHAP credentials for an existing iSCSI client.",
+          "usage" : [ "Update secrets after a credential leak or scheduled rotation.", "Rename the client user while preserving existing LUN mappings." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "username",
+            "in" : "body",
+            "description" : "Optional new CHAP username (8-64 chars).",
+            "required" : false,
+            "example" : "client-rotated"
+          }, {
+            "name" : "password",
+            "in" : "body",
+            "description" : "Optional new CHAP secret (12-16 chars).",
+            "required" : false,
+            "example" : "N3wSecret123456"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Owning iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "name",
+            "in" : "path",
+            "description" : "Existing client name/IQN to update.",
+            "required" : true,
+            "example" : "iqn.1993-08.org.debian:01:client01"
+          } ],
+          "failure_modes" : [ "404 if the client cannot be found", "500 if the gateway rejects the update" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Reload the client list to verify the name before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Check gateway logs; if the update partially applied, reapply with consistent credentials."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "iSCSI credential rotation"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/clients/{name}", "/services/iscsi/{serviceId}/clients/{name}/disks" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34474,6 +35231,55 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Detach an exported RBD image (LUN) from an iSCSI client without deleting the data.",
+          "usage" : [ "Invoke when revoking a client's access to a specific disk before remapping it elsewhere.", "Use during maintenance to unmap volumes ahead of storage reconfiguration." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "body.pool",
+            "in" : "body",
+            "description" : "RBD pool that hosts the disk to unmap.",
+            "required" : true,
+            "example" : "iscsi-images"
+          }, {
+            "name" : "body.name",
+            "in" : "body",
+            "description" : "RBD image name to remove from the client mapping.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Owning iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "name",
+            "in" : "path",
+            "description" : "Client name/IQN whose mapping should be removed.",
+            "required" : true,
+            "example" : "iqn.1993-08.org.debian:01:client01"
+          } ],
+          "failure_modes" : [ "404 if the LUN is not mapped to the client", "500 if the gateway connection fails or rejects the update" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh GET /services/iscsi/{serviceId}/clients/{name}/disks to confirm active mappings before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Check gateway logs/connectivity, then rerun once the management plane is responsive."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 20,
+            "window_seconds" : 3600,
+            "note" : "iSCSI LUN detach"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/clients/{name}/disks", "/services/iscsi/{serviceId}/disks/{wwn}" ],
+          "postprocessing_hint" : "After success, refresh the client's disk list to verify the mapping is gone.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -34515,6 +35321,69 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Map existing or newly created RBD images to an iSCSI client.",
+          "usage" : [ "Provision LUNs for a host by creating and exporting images in one call.", "Re-attach disks to a client after recreating credentials." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "[].pool",
+            "in" : "body",
+            "description" : "RBD pool for the disk.",
+            "required" : true,
+            "example" : "iscsi-images"
+          }, {
+            "name" : "[].name",
+            "in" : "body",
+            "description" : "RBD image name.",
+            "required" : true,
+            "example" : "vm-001"
+          }, {
+            "name" : "[].size",
+            "in" : "body",
+            "description" : "Size in MB for new images (null to use existing).",
+            "required" : false,
+            "example" : "102400"
+          }, {
+            "name" : "[].backstore",
+            "in" : "body",
+            "description" : "Backstore type (USER/USERBLOCK/...) when supported.",
+            "required" : false,
+            "example" : "USER"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Owning iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "name",
+            "in" : "path",
+            "description" : "Client name/IQN receiving the disks.",
+            "required" : true,
+            "example" : "iqn.1993-08.org.debian:01:client01"
+          } ],
+          "failure_modes" : [ "400 if backstore changes are attempted on unsupported servers or the LUN already exists", "404 if the service or client is unknown", "500 if Ceph or the gateway fails during mapping" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure backstore options match server OS and avoid duplicate mappings."
+          }, {
+            "code" : "404",
+            "action" : "Confirm the service/client exists via GET /services/iscsi/{serviceId}."
+          }, {
+            "code" : "500",
+            "action" : "Check gateway logs; remove partially created disks before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "iSCSI disk mapping"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/clients/{name}/disks", "/services/iscsi/{serviceId}/disks/{wwn}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -34595,6 +35464,48 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Resize an exported iSCSI disk without removing it from clients.",
+          "usage" : [ "Grow a LUN after expanding underlying storage.", "Adjust disk size during maintenance while keeping exports intact." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "size",
+            "in" : "body",
+            "description" : "New disk size in MB.",
+            "required" : true,
+            "example" : "102400"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "iSCSI service ID owning the disk.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "wwn",
+            "in" : "path",
+            "description" : "Disk WWN identifier as reported by the gateway.",
+            "required" : true,
+            "example" : "naa.6001405fb0d035ba"
+          } ],
+          "failure_modes" : [ "404 if the disk cannot be found by WWN", "500 if Ceph rejects the resize or the gateway API fails" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the disk list and retry with the current WWN."
+          }, {
+            "code" : "500",
+            "action" : "Inspect gateway/Ceph logs; ensure the new size is valid before rerunning."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "iSCSI disk resize"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/disks", "/services/iscsi/{serviceId}/disks/{wwn}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "delete" : {
@@ -34632,6 +35543,61 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Delete an exported iSCSI disk and optionally remove the backing RBD image.",
+          "usage" : [ "Call when retiring a LUN after data migration.", "Use to free capacity once a client no longer needs the associated disk." ],
+          "response_shape" : "ManagedTask?",
+          "request_parameters" : [ {
+            "name" : "body.deleteData",
+            "in" : "body",
+            "description" : "Set true to delete the RBD data, false to only remove the export.",
+            "required" : true,
+            "example" : "true"
+          }, {
+            "name" : "body.pool",
+            "in" : "body",
+            "description" : "Pool that stores the image; must match gateway metadata.",
+            "required" : true,
+            "example" : "iscsi-images"
+          }, {
+            "name" : "body.image",
+            "in" : "body",
+            "description" : "RBD image name to confirm for deletion.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Owning iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "wwn",
+            "in" : "path",
+            "description" : "World Wide Name of the disk as reported by the gateway.",
+            "required" : true,
+            "example" : "naa.6001405fb0d035ba"
+          } ],
+          "failure_modes" : [ "404 if the WWN is unknown to the gateway", "500 if the pool/image confirmation does not match gateway metadata or Ceph rejects disk deletion" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the iSCSI disk list to obtain the current WWN before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect gateway and Ceph logs; correct mismatched parameters or retry once the storage backend is healthy."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "iSCSI disk deletion"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/disks", "/services/iscsi/{serviceId}/clients/{name}/disks" ],
+          "postprocessing_hint" : "If deleteData=true, wait for the ManagedTask to finish before reusing the pool/image name.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34664,6 +35630,42 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Delete an iSCSI host group after unmapping its members.",
+          "usage" : [ "Call once all hosts and disks have been reassigned and the group is no longer needed.", "Use prior to recreating the group with a different membership or policy." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Gateway service identifier.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "group",
+            "in" : "path",
+            "description" : "Host group name as displayed by the gateway.",
+            "required" : true,
+            "example" : "prod-nodes"
+          } ],
+          "failure_modes" : [ "404 if the group does not exist", "500 if the gateway refuses to remove the group while hosts or disks remain mapped" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh GET /services/iscsi/{serviceId} to confirm current groups before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Remove remaining host/disk mappings, acknowledge the warning, then delete again."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 20,
+            "window_seconds" : 3600,
+            "note" : "iSCSI host-group updates"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/groups/{group}/hosts", "/services/iscsi/{serviceId}/groups/{group}/disks" ],
+          "postprocessing_hint" : "Warn operators that mapped images stay attached until explicitly unmapped.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "put" : {
@@ -34693,6 +35695,41 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Create an iSCSI host group to manage access for multiple clients.",
+          "usage" : [ "Organize initiators before mapping disks in bulk.", "Prepare a group for automated provisioning workflows." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "group",
+            "in" : "path",
+            "description" : "Name of the host group to create.",
+            "required" : true,
+            "example" : "prod-nodes"
+          } ],
+          "failure_modes" : [ "404 if the service ID is invalid", "500 if the gateway refuses to create the host group" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh GET /services/iscsi and retry with a valid service ID."
+          }, {
+            "code" : "500",
+            "action" : "Inspect gateway logs; ensure the group name is unique before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "iSCSI host-group creation"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/groups/{group}/hosts", "/services/iscsi/{serviceId}/groups/{group}/disks" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -34725,6 +35762,55 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Detach RBD disks from an iSCSI host group without deleting the images.",
+          "usage" : [ "Trim group access before assigning disks to a different client or group.", "Use as part of group decommissioning to clear remaining disk mappings." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "body.pool",
+            "in" : "body",
+            "description" : "Pool containing the disk to remove from the group.",
+            "required" : true,
+            "example" : "iscsi-images"
+          }, {
+            "name" : "body.name",
+            "in" : "body",
+            "description" : "RBD image name to unmap from the group.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Gateway service identifier.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "group",
+            "in" : "path",
+            "description" : "Host group name.",
+            "required" : true,
+            "example" : "prod-nodes"
+          } ],
+          "failure_modes" : [ "404 if the disk mapping is unknown to the group", "500 if the gateway API fails while updating masks" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh group disk listings and retry with a current pool/image pair."
+          }, {
+            "code" : "500",
+            "action" : "Check ceph-iscsi logs; retry once connectivity is restored."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "iSCSI disk unmapping"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/groups/{group}", "/services/iscsi/{serviceId}/clients/{name}/disks" ],
+          "postprocessing_hint" : "Verify the host group’s access list in GET /services/iscsi/{serviceId} to confirm removal.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -34767,6 +35853,69 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Map one or more RBD images to every client in a host group.",
+          "usage" : [ "Grant a fleet of initiators access to new storage in a single call.", "Pre-provision LUNs before adding hosts to the group." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "[].pool",
+            "in" : "body",
+            "description" : "RBD pool for each disk.",
+            "required" : true,
+            "example" : "iscsi-images"
+          }, {
+            "name" : "[].name",
+            "in" : "body",
+            "description" : "RBD image name.",
+            "required" : true,
+            "example" : "vm-001"
+          }, {
+            "name" : "[].size",
+            "in" : "body",
+            "description" : "Optional size in MB for images that should be created if missing.",
+            "required" : false,
+            "example" : "102400"
+          }, {
+            "name" : "[].backstore",
+            "in" : "body",
+            "description" : "Backstore type (defaults to USER).",
+            "required" : false,
+            "example" : "USER"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "group",
+            "in" : "path",
+            "description" : "Target host group name.",
+            "required" : true,
+            "example" : "prod-nodes"
+          } ],
+          "failure_modes" : [ "400 if changing backstore is unsupported or images already exist in the group", "404 if the service or group is unknown", "500 if gateway operations fail while adding mappings" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Confirm backstore compatibility and avoid duplicate mappings."
+          }, {
+            "code" : "404",
+            "action" : "List host groups to verify the name before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Check iscsi-gateway logs; remove partially added disks before rerunning."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "iSCSI host-group disk mapping"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/groups/{group}/disks", "/services/iscsi/{serviceId}/clients/{name}/disks" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34798,6 +35947,49 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Remove multiple hosts from an iSCSI host group in a single call.",
+          "usage" : [ "Call when bulk decommissioning initiators or moving them to another group.", "Use before deleting the host group to ensure no members remain." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "body[]",
+            "in" : "body",
+            "description" : "Array of host identifiers (IQNs) to remove.",
+            "required" : true,
+            "example" : "[\"iqn.1993-08.org.debian:01:node01\", \"iqn.1993-08.org.debian:01:node02\"]"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Gateway service identifier.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "group",
+            "in" : "path",
+            "description" : "Host group name.",
+            "required" : true,
+            "example" : "prod-nodes"
+          } ],
+          "failure_modes" : [ "404 if any supplied host is not associated with the group", "500 if the gateway API fails mid-update" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Re-read group membership and retry with only existing hosts."
+          }, {
+            "code" : "500",
+            "action" : "Check ceph-iscsi logs and retry once the control plane is responsive."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "Bulk iSCSI host unassign"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/groups/{group}", "/services/iscsi/{serviceId}/groups/{group}/hosts/{host}" ],
+          "postprocessing_hint" : "Confirm that remaining hosts are correct before assigning new disks.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -34840,6 +36032,48 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Bulk add multiple initiator IQNs to an iSCSI host group.",
+          "usage" : [ "Onboard a batch of servers that should share the same LUN set.", "Restore group membership after recreating host entries." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "body[]",
+            "in" : "body",
+            "description" : "Array of host IQNs to add to the group.",
+            "required" : true,
+            "example" : "[\"iqn.1993-08.org.debian:01:node01\",\"iqn.1993-08.org.debian:01:node02\"]"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "group",
+            "in" : "path",
+            "description" : "Host group name.",
+            "required" : true,
+            "example" : "prod-nodes"
+          } ],
+          "failure_modes" : [ "404 if the service or group does not exist", "500 if any host fails to join" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Verify the group exists via GET /services/iscsi/{serviceId} before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Review gateway logs and retry with hosts that succeeded removed from the list."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "Bulk host enrollment"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/groups/{group}", "/services/iscsi/{serviceId}/groups/{group}/hosts/{host}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34879,6 +36113,47 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Remove a single host from an iSCSI host group while leaving its disk mappings intact.",
+          "usage" : [ "Call when revoking a specific initiator’s access to the group.", "Use ahead of moving the host into a different group." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Gateway service identifier.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "group",
+            "in" : "path",
+            "description" : "Host group name.",
+            "required" : true,
+            "example" : "prod-nodes"
+          }, {
+            "name" : "host",
+            "in" : "path",
+            "description" : "Host IQN or identifier to remove.",
+            "required" : true,
+            "example" : "iqn.1993-08.org.debian:01:node01"
+          } ],
+          "failure_modes" : [ "404 if the host is not currently part of the group", "500 if the gateway rejects the membership update" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "List group hosts and retry with a valid identifier."
+          }, {
+            "code" : "500",
+            "action" : "Inspect ceph-iscsi logs, resolve connectivity issues, then retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "iSCSI host unassign"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/groups/{group}/hosts", "/services/iscsi/{serviceId}/groups/{group}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "put" : {
@@ -34915,6 +36190,47 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Add a single initiator IQN to an existing iSCSI host group.",
+          "usage" : [ "Grant an additional server access to the group's mapped LUNs.", "Re-enroll a host that was previously removed from the group." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "group",
+            "in" : "path",
+            "description" : "Host group name.",
+            "required" : true,
+            "example" : "prod-nodes"
+          }, {
+            "name" : "host",
+            "in" : "path",
+            "description" : "Host IQN or identifier to add.",
+            "required" : true,
+            "example" : "iqn.1993-08.org.debian:01:newnode"
+          } ],
+          "failure_modes" : [ "404 if the service or group does not exist", "500 if the gateway fails to add the host" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "List host groups to verify the group name and ensure the service ID is valid."
+          }, {
+            "code" : "500",
+            "action" : "Inspect gateway logs; confirm the host IQN is formatted correctly before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "iSCSI host enrollment"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}/groups/{group}/hosts", "/services/iscsi/{serviceId}/groups/{group}/hosts/{host}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -34955,6 +36271,45 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Detach one gateway server from the iSCSI cluster, stopping its service and cleaning ceph-iscsi config entries.",
+          "usage" : [ "Call during node maintenance or decommission to drain a specific server from the gateway.", "Use before deleting the entire gateway to remove surplus servers cleanly." ],
+          "response_shape" : "ManagedTask",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Gateway service identifier (see GET /services/iscsi).",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "hostname",
+            "in" : "path",
+            "description" : "Server hostname/FQDN exactly as registered with the gateway.",
+            "required" : true,
+            "example" : "gw1.example.com"
+          } ],
+          "failure_modes" : [ "400 if attempting to remove the final server from the gateway", "404 if the service or hostname cannot be mapped to the gateway", "500 if another management action currently locks the service" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Use DELETE /services/iscsi/{serviceId} to remove the last server instead."
+          }, {
+            "code" : "404",
+            "action" : "Refresh GET /services/iscsi/{serviceId} and retry with a current hostname."
+          }, {
+            "code" : "500",
+            "action" : "Wait for concurrent tasks to finish, then rerun the removal."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "iSCSI gateway node removal"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}", "/services/iscsi/{serviceId}/servers" ],
+          "postprocessing_hint" : "Monitor the ManagedTask until completion before reusing the server for other roles.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34988,6 +36343,42 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Set or override the global target IQN used for a specific iSCSI service.",
+          "usage" : [ "Adjust target IQN after importing an existing configuration.", "Correct the target identifier when recovering from configuration drift." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "body",
+            "in" : "body",
+            "description" : "Target IQN string.",
+            "required" : true,
+            "example" : "iqn.2003-01.com.example:iscsi-gw"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "iSCSI service ID.",
+            "required" : true,
+            "example" : "1"
+          } ],
+          "failure_modes" : [ "400 if the provided IQN is not present in the ceph-iscsi configuration", "404 if the service ID cannot be found" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Review the warning emitted by ignorableWarnings and confirm if overriding is intended."
+          }, {
+            "code" : "404",
+            "action" : "Refresh GET /services/iscsi and retry with a valid service ID."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "iSCSI target IQN update"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}", "/services/iscsi/{serviceId}/clients/{name}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35020,6 +36411,36 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Open an authenticated shell session on the active iSCSI gateway server for manual iscsi-config commands.",
+          "usage" : [ "Use for troubleshooting ceph-iscsi configuration without SSHing manually.", "Call to automate scripted adjustments via the exposed terminal stream." ],
+          "response_shape" : "TerminalConnection",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "iSCSI service ID whose active node should be targeted.",
+            "required" : true,
+            "example" : "1"
+          } ],
+          "failure_modes" : [ "404 if the service or active server cannot be determined", "500 if the shell session fails to initialize" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Ensure the gateway is running and retry once an active server is available."
+          }, {
+            "code" : "500",
+            "action" : "Check terminal service logs; attempt a new connection after resolving host issues."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 3600,
+            "note" : "iSCSI management shell"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}", "/services/iscsi/{serviceId}/servers/{hostname}" ],
+          "postprocessing_hint" : "Close the terminal when finished; state changes may require subsequent API calls to refresh cached data.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35050,6 +36471,51 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Provision an NFS cluster backed by CephFS across the selected servers.",
+          "usage" : [ "Run during initial setup to expose CephFS over NFS.", "Recreate the cluster after a teardown to restore service." ],
+          "response_shape" : "ManagedThreadTask",
+          "request_parameters" : [ {
+            "name" : "servers[]",
+            "in" : "body",
+            "description" : "List of server IDs that will host the ganesha daemons.",
+            "required" : true,
+            "example" : "[12,13,14]"
+          }, {
+            "name" : "exports[]",
+            "in" : "body",
+            "description" : "Optional exports to seed during creation.",
+            "required" : false,
+            "example" : "[{\"nfsPath\":\"/exports/data\",\"backendPath\":\"/cephfs/data\"}]"
+          }, {
+            "name" : "description",
+            "in" : "body",
+            "description" : "Optional human-readable description shown in the UI.",
+            "required" : false,
+            "example" : "Production NFS"
+          } ],
+          "failure_modes" : [ "400 if CephFS is not configured or a server already participates in another NFS cluster", "404 if any referenced server ID does not exist", "500 if ganesha provisioning fails on a target host" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Configure CephFS and ensure each server belongs to at most one NFS cluster."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the server inventory and resubmit valid IDs."
+          }, {
+            "code" : "500",
+            "action" : "Review the ManagedThreadTask log; resolve host issues, then retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 2,
+            "window_seconds" : 86400,
+            "note" : "NFS cluster provisioning"
+          },
+          "related_endpoints" : [ "/services/nfs-gateways/{serviceId}", "/services/nfs-gateways/{serviceId}/exports" ],
+          "postprocessing_hint" : "Monitor the task until completion and confirm cluster health via GET /services/nfs-gateways/{serviceId}.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -35083,6 +36549,48 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Update NFS cluster metadata and server membership.",
+          "usage" : [ "Adjust the cluster description or server list after hardware changes.", "Swap out nodes while keeping exports intact." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "servers[]",
+            "in" : "body",
+            "description" : "Optional new server list replacing the existing membership.",
+            "required" : false,
+            "example" : "[12,15,16]"
+          }, {
+            "name" : "description",
+            "in" : "body",
+            "description" : "Optional updated description shown in the UI.",
+            "required" : false,
+            "example" : "NFS cluster for analytics"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "NFS cluster ID.",
+            "required" : true,
+            "example" : "12"
+          } ],
+          "failure_modes" : [ "400 if a server is already part of another NFS cluster", "404 if the service ID or referenced servers are unknown" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure servers belong to only one NFS cluster before retrying."
+          }, {
+            "code" : "404",
+            "action" : "Refresh service/server inventories and resubmit with valid IDs."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "NFS cluster updates"
+          },
+          "related_endpoints" : [ "/services/nfs-gateways/{serviceId}", "/services/nfs-gateways/{serviceId}/exports" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -35187,6 +36695,57 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Create an NFS export and trigger the ganesha daemons to apply it.",
+          "usage" : [ "Expose new CephFS directories over NFS.", "Call after preparing data that should be served to clients." ],
+          "response_shape" : "NfsGatewayExport",
+          "request_parameters" : [ {
+            "name" : "nfsPath",
+            "in" : "body",
+            "description" : "Export path visible to clients.",
+            "required" : true,
+            "example" : "/exports/data"
+          }, {
+            "name" : "backendPath",
+            "in" : "body",
+            "description" : "CephFS path backing the export.",
+            "required" : true,
+            "example" : "/cephfs/data"
+          }, {
+            "name" : "squash",
+            "in" : "body",
+            "description" : "Optional squash policy (e.g. root_squash).",
+            "required" : false,
+            "example" : "root_squash"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "NFS cluster ID.",
+            "required" : true,
+            "example" : "12"
+          } ],
+          "failure_modes" : [ "400 if an export with the same nfsPath already exists", "404 if the service ID is invalid", "500 if ganesha fails to reload the configuration" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "List existing exports and choose a unique nfsPath."
+          }, {
+            "code" : "404",
+            "action" : "Ensure the cluster still exists before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect ganesha logs on member servers; resolve issues then resubmit."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "NFS export creation"
+          },
+          "related_endpoints" : [ "/services/nfs-gateways/{serviceId}/exports/{exportId}", "/services/nfs-gateways/{serviceId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35228,6 +36787,60 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Replace an existing NFS export definition with new parameters.",
+          "usage" : [ "Adjust export paths or permissions after reorganizing data.", "Update squash or client access settings without recreating the export." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "nfsPath",
+            "in" : "body",
+            "description" : "New export path presented to clients.",
+            "required" : true,
+            "example" : "/exports/data"
+          }, {
+            "name" : "backendPath",
+            "in" : "body",
+            "description" : "CephFS path backing the export.",
+            "required" : true,
+            "example" : "/cephfs/data"
+          }, {
+            "name" : "squash",
+            "in" : "body",
+            "description" : "Squash mode (e.g. root_squash).",
+            "required" : false,
+            "example" : "root_squash"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "NFS cluster ID.",
+            "required" : true,
+            "example" : "12"
+          }, {
+            "name" : "exportId",
+            "in" : "path",
+            "description" : "Existing export identifier.",
+            "required" : true,
+            "example" : "3"
+          } ],
+          "failure_modes" : [ "404 if the export ID or service ID is unknown", "500 if ganesha reload fails or servers reject the new configuration" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the export list before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect ganesha logs; correct configuration issues then resubmit."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "NFS export updates"
+          },
+          "related_endpoints" : [ "/services/nfs-gateways/{serviceId}/exports", "/services/nfs-gateways/{serviceId}/exports/{exportId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "delete" : {
@@ -35258,6 +36871,41 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Remove an NFS export from the gateway and propagate the deletion to all servers.",
+          "usage" : [ "Invoke after decommissioning a dataset so clients lose access.", "Use prior to redefining the export with new parameters to avoid duplicate entries." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "NFS gateway service ID.",
+            "required" : true,
+            "example" : "12"
+          }, {
+            "name" : "exportId",
+            "in" : "path",
+            "description" : "Numeric export identifier from GET /services/nfs-gateways/{serviceId}/exports.",
+            "required" : true,
+            "example" : "3"
+          } ],
+          "failure_modes" : [ "404 if the service or export ID is unknown", "500 if server-side export deletion fails" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the export list; retry with a current ID."
+          }, {
+            "code" : "500",
+            "action" : "Inspect Ganesha logs and rerun once the management task succeeds."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "NFS export removal"
+          },
+          "related_endpoints" : [ "/services/nfs-gateways/{serviceId}/exports", "/services/nfs-gateways/{serviceId}/exports/{exportId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -35400,6 +37048,51 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Queue a sequential restart of multiple services/OSDs, enforcing cluster health checks between steps.",
+          "usage" : [ "Use for critical daemons where concurrency would cause downtime (monitors, managers, SMB servers, etc.).", "Trigger after rolling out configuration or package updates when a safe restart cadence is required." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "[].id",
+            "in" : "body",
+            "description" : "Service ID or OSD daemon ID to restart.",
+            "required" : true,
+            "example" : "87"
+          }, {
+            "name" : "[].server",
+            "in" : "body",
+            "description" : "Server ID for multi-server services or OSD placement (nullable).",
+            "required" : false,
+            "example" : "12"
+          }, {
+            "name" : "[].isOsd",
+            "in" : "body",
+            "description" : "Set true when the entry refers to an OSD daemon.",
+            "required" : false,
+            "example" : "false"
+          } ],
+          "failure_modes" : [ "400 if any referenced service/OSD is unknown", "409 if another rolling restart is already in progress", "500 if a step fails to restart within safety thresholds" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Refresh GET /services to fetch current IDs before resubmitting."
+          }, {
+            "code" : "409",
+            "action" : "Wait for the currently running rolling restart task to finish before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect the ManagedTask log to identify the failing service, resolve its issue, then rerun with the remaining entries."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "Rolling restart orchestration"
+          },
+          "related_endpoints" : [ "/services/restart", "/tasks" ],
+          "postprocessing_hint" : "Monitor the returned ManagedTask; if it stops on a failure, address the reported service before retrying.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35431,6 +37124,60 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Deploy a simple SMB cluster backed by CephFS across the specified servers.",
+          "usage" : [ "Call during initial SMB setup once CephFS and required networks are configured.", "Recreate the cluster after teardown when migrating to new hardware." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "servers[]",
+            "in" : "body",
+            "description" : "Array of server/NIC/VLAN tuples that will host CTDB nodes.",
+            "required" : true,
+            "example" : "[{\"server\":21,\"nic\":7,\"vlan\":null}]"
+          }, {
+            "name" : "virtualIps[]",
+            "in" : "body",
+            "description" : "Floating IPs that will be distributed across nodes.",
+            "required" : true,
+            "example" : "[\"192.168.20.100\",\"192.168.20.101\"]"
+          }, {
+            "name" : "shares[]",
+            "in" : "body",
+            "description" : "Optional share definitions to seed during creation.",
+            "required" : false,
+            "example" : "[{\"name\":\"data\",\"path\":\"/cephfs/data\"}]"
+          }, {
+            "name" : "description",
+            "in" : "body",
+            "description" : "Optional display name for the SMB cluster.",
+            "required" : false,
+            "example" : "Production SMB"
+          } ],
+          "failure_modes" : [ "400 if CephFS is not configured, no servers are provided, or virtual IP validation fails", "404 if any referenced server ID does not exist", "409 if network/IP conflicts require operator acknowledgement", "500 if CTDB or samba provisioning fails on a host" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure at least one server is specified and CephFS is configured before retrying."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the server list and resubmit valid IDs."
+          }, {
+            "code" : "409",
+            "action" : "Review the warning presented via ignorableWarnings and confirm the IP layout before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect the ManagedTask log for the failing node; fix the issue then re-run the creation."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 2,
+            "window_seconds" : 86400,
+            "note" : "SMB cluster provisioning"
+          },
+          "related_endpoints" : [ "/services/smb/{serviceId}", "/services/smb/{serviceId}/shares", "/services/smb/{serviceId}/servers" ],
+          "postprocessing_hint" : "Wait for the ManagedTask to finish, then verify CTDB health and share accessibility.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35461,6 +37208,66 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Deploy an Active Directory-integrated SMB cluster with CTDB high availability.",
+          "usage" : [ "Use when administrators need domain-joined SMB access to CephFS shares.", "Recreate the cluster on new hardware while keeping AD as the identity provider." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "servers[]",
+            "in" : "body",
+            "description" : "Server/NIC/VLAN tuples including AD credentials for each node.",
+            "required" : true,
+            "example" : "[{\"server\":21,\"nic\":7,\"vlan\":null,\"domainAdminUser\":\"Administrator\"}]"
+          }, {
+            "name" : "serviceDnsName",
+            "in" : "body",
+            "description" : "Shared DNS name for the cluster; may be blank for per-host joins.",
+            "required" : true,
+            "example" : "smb.prod.example.com"
+          }, {
+            "name" : "virtualIps[]",
+            "in" : "body",
+            "description" : "Floating IPs managed by CTDB.",
+            "required" : true,
+            "example" : "[\"192.168.30.50\",\"192.168.30.51\"]"
+          }, {
+            "name" : "joinWithSssd",
+            "in" : "body",
+            "description" : "Join the domain via sssd (alternative to adcli).",
+            "required" : false,
+            "example" : "false"
+          }, {
+            "name" : "shares[]",
+            "in" : "body",
+            "description" : "Optional shares to create immediately.",
+            "required" : false,
+            "example" : "[{\"name\":\"home\",\"path\":\"/cephfs/home\"}]"
+          } ],
+          "failure_modes" : [ "400 if CephFS is missing, servers are omitted, or AD credentials are incomplete", "404 if any server ID is invalid", "409 if network/DNS validation raises ignorable warnings", "500 if AD join or CTDB provisioning fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure CephFS is configured and supply credentials for every server."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the server inventory and retry with valid IDs."
+          }, {
+            "code" : "409",
+            "action" : "Review the warning surfaced via ignorableWarnings and acknowledge before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect the ManagedTask log to address AD or CTDB failures prior to re-running."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 2,
+            "window_seconds" : 86400,
+            "note" : "SMB+AD cluster provisioning"
+          },
+          "related_endpoints" : [ "/services/smb/{serviceId}", "/services/smb/{serviceId}/service-dns-name", "/services/smb/{serviceId}/servers" ],
+          "postprocessing_hint" : "Once the task completes, verify CTDB health and domain membership before exposing shares.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -35501,6 +37308,76 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Update SMB cluster metadata, virtual IPs, or credentials.",
+          "usage" : [ "Adjust virtual IP assignments after changing network topology.", "Rotate admin/readonly passwords following security policies." ],
+          "response_shape" : "ManagedThreadTask",
+          "request_parameters" : [ {
+            "name" : "virtualIps[]",
+            "in" : "body",
+            "description" : "Optional new set of CTDB floating IPs.",
+            "required" : false,
+            "example" : "[\"192.168.20.100\",\"192.168.20.101\"]"
+          }, {
+            "name" : "adminPassword",
+            "in" : "body",
+            "description" : "Optional new croit admin password for SMB shares.",
+            "required" : false,
+            "example" : "••••••"
+          }, {
+            "name" : "readonlyPassword",
+            "in" : "body",
+            "description" : "Optional new readonly password.",
+            "required" : false,
+            "example" : "••••••"
+          }, {
+            "name" : "domainController",
+            "in" : "body",
+            "description" : "Optional AD domain controller hostname.",
+            "required" : false,
+            "example" : "dc01"
+          }, {
+            "name" : "dnsServers[]",
+            "in" : "body",
+            "description" : "Optional DNS servers for SMB nodes.",
+            "required" : false,
+            "example" : "[\"192.168.20.10\",\"192.168.20.11\"]"
+          }, {
+            "name" : "description",
+            "in" : "body",
+            "description" : "Optional UI description for the cluster.",
+            "required" : false,
+            "example" : "Production SMB cluster"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "SMB cluster ID.",
+            "required" : true,
+            "example" : "5"
+          } ],
+          "failure_modes" : [ "400 if virtual IP validation fails or required passwords are missing for updates", "404 if the cluster ID cannot be found", "500 if Samba/CTDB reconfiguration fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Review ignorableWarnings for IP conflicts and provide all required credentials."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the SMB service list before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Check task logs and underlying nodes; rerun after issues are resolved."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "SMB cluster updates"
+          },
+          "related_endpoints" : [ "/services/smb/{serviceId}", "/services/smb/{serviceId}/service-dns-name" ],
+          "postprocessing_hint" : "Monitor the ManagedThreadTask until completion and verify CTDB status afterward.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -35589,6 +37466,35 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Tear down an SMB cluster, removing all servers and shares managed by croit.",
+          "usage" : [ "Call when decommissioning the SMB service or migrating to a fresh deployment.", "Use after draining shares and clients to ensure the cluster is fully removed." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "SMB cluster identifier.",
+            "required" : true,
+            "example" : "5"
+          } ],
+          "failure_modes" : [ "404 if the SMB cluster no longer exists", "500 if another management action currently locks the service" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Reload the SMB service inventory; only retry when the cluster is still listed."
+          }, {
+            "code" : "500",
+            "action" : "Wait for outstanding tasks to finish, then delete again."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 3,
+            "window_seconds" : 3600,
+            "note" : "SMB cluster removal"
+          },
+          "related_endpoints" : [ "/services/smb/{serviceId}/servers/{serverId}", "/services/smb/{serviceId}/shares/{shareId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35628,6 +37534,72 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Scale an SMB cluster by onboarding a new node with Samba and CTDB services.",
+          "usage" : [ "Add capacity after provisioning additional servers.", "Re-add a node following maintenance once it is ready to rejoin the cluster." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "server",
+            "in" : "body",
+            "description" : "Server ID to add.",
+            "required" : true,
+            "example" : "24"
+          }, {
+            "name" : "nic",
+            "in" : "body",
+            "description" : "NIC ID for CTDB/public traffic.",
+            "required" : true,
+            "example" : "9"
+          }, {
+            "name" : "vlan",
+            "in" : "body",
+            "description" : "Optional VLAN ID for the CTDB interface.",
+            "required" : false,
+            "example" : "30"
+          }, {
+            "name" : "domainAdminUser",
+            "in" : "body",
+            "description" : "Domain admin account (required for AD clusters).",
+            "required" : false,
+            "example" : "Administrator"
+          }, {
+            "name" : "domainAdminPassword",
+            "in" : "body",
+            "description" : "Password for the domain admin account.",
+            "required" : false,
+            "example" : "••••••"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "SMB cluster ID.",
+            "required" : true,
+            "example" : "5"
+          } ],
+          "failure_modes" : [ "400 if validation fails (missing credentials, unhealthy cluster state)", "404 if the server or cluster ID is invalid", "409 if IP validation surfaces conflicts", "500 if CTDB or AD join fails on the new server" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure all existing nodes are healthy and provide required credentials."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the cluster/server lists and retry with valid IDs."
+          }, {
+            "code" : "409",
+            "action" : "Review ignorableWarnings and acknowledge conflicts before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect the ManagedTask log, resolve host issues, then rerun."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "SMB node onboarding"
+          },
+          "related_endpoints" : [ "/services/smb/{serviceId}/servers/{serverId}", "/services/smb/{serviceId}/service-dns-name" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -35669,6 +37641,44 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Remove a single server from the SMB cluster while keeping the cluster online.",
+          "usage" : [ "Call before draining a node for maintenance or replacement.", "Use to rebalance the cluster after reducing capacity requirements." ],
+          "response_shape" : "ManagedThreadTask?",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "SMB cluster identifier.",
+            "required" : true,
+            "example" : "5"
+          }, {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Server ID as returned by GET /services/smb/{serviceId}.",
+            "required" : true,
+            "example" : "23"
+          } ],
+          "failure_modes" : [ "400 if attempting to remove the final server (operation disallowed)", "404 if the server is not associated with the cluster", "500 if another cluster task is running" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Use DELETE /services/smb/{serviceId} to dismantle the remaining cluster."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the server list to locate a valid ID before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Allow in-flight tasks to complete and run the removal again."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "SMB node removal"
+          },
+          "related_endpoints" : [ "/services/smb/{serviceId}", "/services/smb/{serviceId}/servers" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35709,6 +37719,63 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Update the shared DNS name under which an AD-integrated SMB cluster registers.",
+          "usage" : [ "Call after receiving a new service DNS entry or correcting a previous configuration.", "Rejoin the cluster to AD with a fresh name following recovery exercises." ],
+          "response_shape" : "ManagedThreadTask?",
+          "request_parameters" : [ {
+            "name" : "serviceDnsName",
+            "in" : "body",
+            "description" : "Target DNS name for the cluster (non-empty unless sssd mode allows otherwise).",
+            "required" : true,
+            "example" : "smb.prod.example.com"
+          }, {
+            "name" : "domainAdminUser",
+            "in" : "body",
+            "description" : "Domain admin account used to perform the join.",
+            "required" : true,
+            "example" : "Administrator"
+          }, {
+            "name" : "domainAdminPassword",
+            "in" : "body",
+            "description" : "Password for the domain admin account.",
+            "required" : true,
+            "example" : "••••••"
+          }, {
+            "name" : "joinServer",
+            "in" : "body",
+            "description" : "Optional server ID to execute the AD join from.",
+            "required" : false,
+            "example" : "21"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "SMB cluster ID.",
+            "required" : true,
+            "example" : "5"
+          } ],
+          "failure_modes" : [ "400 if the cluster is not AD-enabled, credentials are missing, or removing the DNS name is unsupported", "404 if joinServer is provided but not part of the cluster", "500 if Active Directory join operations fail" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Confirm the cluster uses AD and provide the required domain credentials."
+          }, {
+            "code" : "404",
+            "action" : "List cluster servers and retry with a valid joinServer."
+          }, {
+            "code" : "500",
+            "action" : "Review the ManagedThreadTask log for AD errors; fix and rerun."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "SMB DNS updates"
+          },
+          "related_endpoints" : [ "/services/smb/{serviceId}", "/services/smb/active-directory-authentication" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35748,6 +37815,57 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Create a new Samba share backed by CephFS within the cluster.",
+          "usage" : [ "Expose additional datasets to SMB clients without restarting services.", "Provision temporary maintenance shares for support operations." ],
+          "response_shape" : "GeneratedId",
+          "request_parameters" : [ {
+            "name" : "name",
+            "in" : "body",
+            "description" : "Share name presented to clients.",
+            "required" : true,
+            "example" : "projects"
+          }, {
+            "name" : "path",
+            "in" : "body",
+            "description" : "CephFS path exported by the share.",
+            "required" : true,
+            "example" : "/cephfs/projects"
+          }, {
+            "name" : "readOnly",
+            "in" : "body",
+            "description" : "Optional read-only setting.",
+            "required" : false,
+            "example" : "false"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "SMB cluster ID.",
+            "required" : true,
+            "example" : "5"
+          } ],
+          "failure_modes" : [ "404 if the cluster ID does not exist", "409 if a share with the same name already exists", "500 if Samba fails to reload the configuration" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the cluster list and retry with a valid ID."
+          }, {
+            "code" : "409",
+            "action" : "Rename or remove the conflicting share before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect Samba/CTDB logs and re-run after resolving errors."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "SMB share creation"
+          },
+          "related_endpoints" : [ "/services/smb/{serviceId}/shares/{shareId}", "/services/smb/{serviceId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -35790,6 +37908,60 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Replace an existing SMB share definition with new parameters.",
+          "usage" : [ "Update share paths or permissions without deleting and recreating the share.", "Align share configuration with policy changes." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "name",
+            "in" : "body",
+            "description" : "New share name (overwrites existing).",
+            "required" : true,
+            "example" : "projects"
+          }, {
+            "name" : "path",
+            "in" : "body",
+            "description" : "CephFS path exported by the share.",
+            "required" : true,
+            "example" : "/cephfs/projects"
+          }, {
+            "name" : "readOnly",
+            "in" : "body",
+            "description" : "Optional read-only flag.",
+            "required" : false,
+            "example" : "false"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "SMB cluster ID.",
+            "required" : true,
+            "example" : "5"
+          }, {
+            "name" : "shareId",
+            "in" : "path",
+            "description" : "Share identifier to replace.",
+            "required" : true,
+            "example" : "12"
+          } ],
+          "failure_modes" : [ "404 if the share ID does not exist", "500 if Samba fails to apply the new configuration" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "List shares to confirm the ID before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect Samba logs and re-run after correcting configuration errors."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 18,
+            "window_seconds" : 3600,
+            "note" : "SMB share update"
+          },
+          "related_endpoints" : [ "/services/smb/{serviceId}/shares", "/services/smb/{serviceId}/shares/{shareId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "delete" : {
@@ -35821,6 +37993,38 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Remove an SMB share definition from the cluster configuration.",
+          "usage" : [ "Call when retiring a dataset or before recreating the share with new settings.", "Use to revoke access quickly while leaving the cluster online." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "SMB cluster identifier.",
+            "required" : true,
+            "example" : "5"
+          }, {
+            "name" : "shareId",
+            "in" : "path",
+            "description" : "Share ID from GET /services/smb/{serviceId}/shares.",
+            "required" : true,
+            "example" : "12"
+          } ],
+          "failure_modes" : [ "404 if the share ID does not exist on the cluster" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the share list and retry with a current identifier."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 18,
+            "window_seconds" : 3600,
+            "note" : "SMB share removal"
+          },
+          "related_endpoints" : [ "/services/smb/{serviceId}/shares", "/services/smb/{serviceId}/shares/{shareId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35848,6 +38052,48 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Start multiple services or OSD daemons in parallel via the service manager.",
+          "usage" : [ "Bring a set of daemons online after maintenance windows.", "Automate recovery workflows that re-enable services across nodes." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "[].id",
+            "in" : "body",
+            "description" : "Service ID or OSD daemon ID to start.",
+            "required" : true,
+            "example" : "87"
+          }, {
+            "name" : "[].server",
+            "in" : "body",
+            "description" : "Server ID for multi-server services or OSD placement (nullable).",
+            "required" : false,
+            "example" : "12"
+          }, {
+            "name" : "[].isOsd",
+            "in" : "body",
+            "description" : "Set true when the entry represents an OSD daemon.",
+            "required" : false,
+            "example" : "false"
+          } ],
+          "failure_modes" : [ "404 if any service/server mapping is invalid", "409 if the service manager rejects concurrent starts" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the service list via GET /services before resubmitting."
+          }, {
+            "code" : "409",
+            "action" : "Wait for other control tasks to complete or split the batch."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Operator-triggered service starts"
+          },
+          "related_endpoints" : [ "/services/stop", "/services/restart", "/services/rolling-restart" ],
+          "postprocessing_hint" : "Poll GET /services to confirm each entry reports a running state.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35874,6 +38120,48 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Stop multiple services or OSD daemons in one request.",
+          "usage" : [ "Gracefully shut down daemons prior to maintenance windows.", "Evacuate services from a node before hardware work." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "[].id",
+            "in" : "body",
+            "description" : "Service ID or OSD daemon ID to stop.",
+            "required" : true,
+            "example" : "87"
+          }, {
+            "name" : "[].server",
+            "in" : "body",
+            "description" : "Server ID for multi-server services/OSDs.",
+            "required" : false,
+            "example" : "12"
+          }, {
+            "name" : "[].isOsd",
+            "in" : "body",
+            "description" : "True when the entry represents an OSD daemon.",
+            "required" : false,
+            "example" : "true"
+          } ],
+          "failure_modes" : [ "404 if any referenced service/server combination is unknown", "409 if the service manager prevents concurrent stops" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh GET /services to confirm current IDs before retrying."
+          }, {
+            "code" : "409",
+            "action" : "Sequence the stops or wait for other control operations to complete."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Operator-triggered service stops"
+          },
+          "related_endpoints" : [ "/services/start", "/services/restart", "/services/rolling-restart" ],
+          "postprocessing_hint" : "Check GET /services to ensure the daemons report a stopped state.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -35908,6 +38196,42 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Restart a single service instance, optionally targeting a specific server.",
+          "usage" : [ "Apply configuration changes that require a daemon restart.", "Recover a misbehaving service without touching others." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "server",
+            "in" : "query",
+            "description" : "Optional server ID for multi-server services (query parameter).",
+            "required" : false,
+            "example" : "12"
+          } ],
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Service ID to restart.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if the service/server combination is unknown", "409 if another control action is already queued for the service" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "List current services via GET /services and retry with valid IDs."
+          }, {
+            "code" : "409",
+            "action" : "Wait for ongoing operations to finish before rerunning the restart."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Individual service restart"
+          },
+          "related_endpoints" : [ "/services/{id}/start", "/services/{id}/stop", "/services/rolling-restart" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35941,6 +38265,42 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Start a single service on its assigned server (or a specific server for multi-instance services).",
+          "usage" : [ "Bring a daemon back online after targeted maintenance.", "Recover a service that was previously stopped by operators." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "server",
+            "in" : "query",
+            "description" : "Server ID for multi-server services (query parameter).",
+            "required" : false,
+            "example" : "12"
+          } ],
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Service ID to start.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if the service or server pairing is invalid", "409 if another control task already manipulates the service" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Retrieve the current service inventory and retry with valid IDs."
+          }, {
+            "code" : "409",
+            "action" : "Wait for other service control operations to complete."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Operator-triggered service start"
+          },
+          "related_endpoints" : [ "/services/{id}/stop", "/services/{id}/restart", "/services/start" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -35973,6 +38333,42 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Stop a single service instance on demand.",
+          "usage" : [ "Quiesce a daemon before performing host maintenance.", "Temporarily disable a service causing issues without touching others." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "server",
+            "in" : "query",
+            "description" : "Optional server ID for multi-server services (query parameter).",
+            "required" : false,
+            "example" : "12"
+          } ],
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Service ID to stop.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if the service/server pairing cannot be found", "409 if another control task is already acting on the service" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh GET /services and retry with up-to-date IDs."
+          }, {
+            "code" : "409",
+            "action" : "Wait for other tasks to finish before issuing the stop."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Operator-triggered service stop"
+          },
+          "related_endpoints" : [ "/services/{id}/start", "/services/{id}/restart", "/services/stop" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -36013,6 +38409,69 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Update mutable properties of a service (description, ports, DNS, etc.).",
+          "usage" : [ "Adjust RGW service ports or DNS after network changes.", "Revise the display description for operators." ],
+          "response_shape" : "ManagedThreadTask?",
+          "request_parameters" : [ {
+            "name" : "description",
+            "in" : "body",
+            "description" : "Optional description shown in the UI.",
+            "required" : false,
+            "example" : "RGW on node12"
+          }, {
+            "name" : "port",
+            "in" : "body",
+            "description" : "Optional plain HTTP port (RGW only).",
+            "required" : false,
+            "example" : "8080"
+          }, {
+            "name" : "sslPort",
+            "in" : "body",
+            "description" : "Optional HTTPS port (RGW only).",
+            "required" : false,
+            "example" : "8443"
+          }, {
+            "name" : "rgwDnsName",
+            "in" : "body",
+            "description" : "Optional DNS name for RGW services.",
+            "required" : false,
+            "example" : "rgw.example.com"
+          }, {
+            "name" : "rgwZone",
+            "in" : "body",
+            "description" : "Optional RGW zone to assign.",
+            "required" : false,
+            "example" : "us-east"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service ID to update.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if the service ID is unknown", "409 if concurrent operations hold the service lock", "500 if backend updates fail" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Reload the service list before retrying."
+          }, {
+            "code" : "409",
+            "action" : "Wait for other control operations to finish before resubmitting."
+          }, {
+            "code" : "500",
+            "action" : "Review the ManagedThreadTask log; correct configuration issues, then retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "Service metadata update"
+          },
+          "related_endpoints" : [ "/services/{id}/start", "/services/{id}/stop", "/services" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -36131,6 +38590,49 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Restart a single service or OSD daemon, optionally targeting a specific server instance.",
+          "usage" : [ "Bounce an unhealthy daemon without impacting peers.", "Restart an OSD after storage maintenance." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "server",
+            "in" : "query",
+            "description" : "Optional server ID for multi-server services (query parameter).",
+            "required" : false,
+            "example" : "12"
+          } ],
+          "path_parameters" : [ {
+            "name" : "type",
+            "in" : "path",
+            "description" : "Domain of the target (services or osds).",
+            "required" : true,
+            "example" : "services"
+          }, {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Service ID or OSD daemon ID to restart.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if the service/OSD (or specified server) cannot be found", "409 if another control task prevents the restart" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the service inventory and retry with valid identifiers."
+          }, {
+            "code" : "409",
+            "action" : "Wait for other operations to complete before reissuing the restart."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Individual service restart"
+          },
+          "related_endpoints" : [ "/services/start", "/services/stop", "/services/rolling-restart" ],
+          "postprocessing_hint" : "Check GET /services/{type}/{id} or monitor tasks to confirm the daemon returns to running state.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -36172,6 +38674,48 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Start a single service or OSD daemon, specifying whether the ID refers to a service or an OSD.",
+          "usage" : [ "Bring an individual daemon online after maintenance.", "Start an OSD process once its device is available." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "server",
+            "in" : "query",
+            "description" : "Optional server ID for multi-server services (query parameter).",
+            "required" : false,
+            "example" : "12"
+          } ],
+          "path_parameters" : [ {
+            "name" : "type",
+            "in" : "path",
+            "description" : "Domain selector (services or osds).",
+            "required" : true,
+            "example" : "osds"
+          }, {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Service ID or OSD daemon ID.",
+            "required" : true,
+            "example" : "42"
+          } ],
+          "failure_modes" : [ "404 if the target ID or server reference is invalid", "409 if a conflicting control task is in progress" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Verify IDs via GET /services or GET /osds before retrying."
+          }, {
+            "code" : "409",
+            "action" : "Retry once other control tasks complete."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Individual service/OSD start"
+          },
+          "related_endpoints" : [ "/services/{type}/{id}/stop", "/services/{type}/{id}/restart" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -36212,6 +38756,48 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Stop a single service or OSD daemon designated by type and ID.",
+          "usage" : [ "Suspend a daemon before performing maintenance on its host or storage.", "Temporarily disable an OSD without affecting others." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "server",
+            "in" : "query",
+            "description" : "Optional server ID for multi-server services (query parameter).",
+            "required" : false,
+            "example" : "12"
+          } ],
+          "path_parameters" : [ {
+            "name" : "type",
+            "in" : "path",
+            "description" : "Domain selector (services or osds).",
+            "required" : true,
+            "example" : "services"
+          }, {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Service ID or OSD daemon ID.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if the identifier or server mapping does not exist", "409 if another control task is already operating on the daemon" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the service/OSD inventory prior to retrying."
+          }, {
+            "code" : "409",
+            "action" : "Wait for concurrent operations to finish before issuing the stop."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Individual service/OSD stop"
+          },
+          "related_endpoints" : [ "/services/{type}/{id}/start", "/services/{type}/{id}/restart" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }

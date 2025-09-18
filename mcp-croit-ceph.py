@@ -55,8 +55,8 @@ class CroitCephServer:
         resolve_references=True,
         offer_whole_spec=False,
         endpoints_as_tools=False,  # Kept for backwards compatibility
-        max_category_tools=10,  # Maximum number of category tools to generate
-        min_endpoints_per_category=5,  # Minimum endpoints needed for a category tool
+        max_category_tools=40,  # Maximum number of category tools to generate (40 covers all current categories)
+        min_endpoints_per_category=1,  # Minimum endpoints needed for a category tool (include single-endpoint categories like logs)
         openapi_file=None,  # Optional: Use local OpenAPI spec file instead of fetching from server
     ):
         # tools is a map of tool name (as given to and later provided by the LLM) to the tool info.
