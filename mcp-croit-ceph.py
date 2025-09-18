@@ -356,7 +356,14 @@ Valid filter ops are:
                     for param, detail in llm_hints["parameter_details"].items():
                         description += f"\n- {param}: {detail}"
 
-                description = description[:1000]  # Increased limit for examples
+                # Add token optimization hints for large data endpoints
+                if any(pattern in path.lower() for pattern in ['/list', '/all', '/export', '/stats', '/logs']):
+                    description += "\n\n💡 Token Optimization:"
+                    description += "\n• Use limit=10 for initial exploration"
+                    description += "\n• Add filters to reduce data (e.g. status='error')"
+                    description += "\n• Large responses will be auto-truncated to 50 items"
+
+                description = description[:1200]  # Increased limit for examples and hints
 
                 parameters = self._build_parameters_schema(operation)
                 # Specifying the output schema means it must be correct.

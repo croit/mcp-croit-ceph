@@ -22434,6 +22434,42 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Detach an NVMe-oF disk from the gateway, optionally deleting the backing RBD image.",
+          "usage" : [ "Retire LUNs no longer needed by clients.", "Remove test disks while optionally cleaning up Ceph data." ],
+          "response_shape" : "ManagedThreadTask",
+          "request_parameters" : [ {
+            "name" : "deleteData",
+            "in" : "body",
+            "description" : "Set true to delete the underlying RBD image.",
+            "required" : false,
+            "example" : "false"
+          } ],
+          "path_parameters" : [ {
+            "name" : "diskId",
+            "in" : "path",
+            "description" : "NVMe-oF disk identifier.",
+            "required" : true,
+            "example" : "17"
+          } ],
+          "failure_modes" : [ "404 if the disk ID does not exist", "500 if gateway reconfiguration or Ceph deletion fails" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "List NVMe-oF disks to verify the ID before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Check nvmeof-target and Ceph logs; clean up partially removed resources before rerunning."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "NVMe-oF disk removal"
+          },
+          "related_endpoints" : [ "/gateways/nvmeof/services/{serviceId}/transports/{type}", "/gateways/nvmeof/disks" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34307,6 +34343,38 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Deploy a RADOS Gateway (RGW) instance on the specified server.",
+          "usage" : [ "Scale RGW capacity by adding additional gateways.", "Recreate an RGW daemon after server replacement." ],
+          "response_shape" : "ManagedTask",
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Server ID that will host the RGW service.",
+            "required" : true,
+            "example" : "28"
+          } ],
+          "failure_modes" : [ "400 if an RGW already runs on the server", "404 if the server ID cannot be found", "500 if key creation, Ceph configuration, or daemon startup fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Ensure multi-RGW per server is enabled or remove the existing RGW first."
+          }, {
+            "code" : "404",
+            "action" : "Refresh GET /servers and retry with a valid ID."
+          }, {
+            "code" : "500",
+            "action" : "Inspect ManagedTask logs, resolve host issues, and rerun the deployment."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "RGW provisioning"
+          },
+          "related_endpoints" : [ "/services/{id}/start", "/services/{id}/restart", "/servers/{serverId}/services/{serviceId}/start" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34339,6 +34407,44 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Restart a service instance on a specific server.",
+          "usage" : [ "Bounce a daemon after applying configuration changes on a single node.", "Recover a service exhibiting issues without affecting other replicas." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Server hosting the service.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service ID to restart.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if the service is not bound to the server", "409 if another control task conflicts", "500 if the restart fails" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the server's service list before retrying."
+          }, {
+            "code" : "409",
+            "action" : "Wait for other actions to complete."
+          }, {
+            "code" : "500",
+            "action" : "Review server logs to resolve issues and retry once healthy."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Per-server service restart"
+          },
+          "related_endpoints" : [ "/servers/{serverId}/services/{serviceId}/start", "/servers/{serverId}/services/{serviceId}/stop" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -34373,6 +34479,44 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Start a specific service instance on a particular server.",
+          "usage" : [ "Bring a daemon online on a chosen node without affecting other replicas.", "Recover a service after host maintenance." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Server hosting the service.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service ID to start on the server.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if the service is not associated with the server", "409 if another control action is in progress", "500 if the daemon fails to start" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "List services for the server and retry with valid IDs."
+          }, {
+            "code" : "409",
+            "action" : "Wait for other tasks to complete before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Inspect logs on the server to fix underlying issues prior to reissuing the command."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Per-server service start"
+          },
+          "related_endpoints" : [ "/servers/{serverId}/services/{serviceId}/stop", "/servers/{serverId}/services/{serviceId}/restart" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34405,6 +34549,44 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Stop a single service instance running on a specific server.",
+          "usage" : [ "Drain a daemon prior to host maintenance.", "Temporarily disable a problematic service on one server." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Server hosting the service.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service ID to stop.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if the service is not linked to the server", "409 if other control operations are pending", "500 if the daemon fails to stop" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "List server services to confirm mapping before retrying."
+          }, {
+            "code" : "409",
+            "action" : "Wait for existing tasks to finish."
+          }, {
+            "code" : "500",
+            "action" : "Investigate logs on the server and retry once issues are resolved."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Per-server service stop"
+          },
+          "related_endpoints" : [ "/servers/{serverId}/services/{serviceId}/start", "/servers/{serverId}/services/{serviceId}/restart" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -34448,6 +34630,50 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Restart a specific service or OSD instance on a server, identified by type and ID.",
+          "usage" : [ "Bounce a daemon after applying configuration updates.", "Recover an OSD exhibiting issues on a particular node." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Target server ID.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "type",
+            "in" : "path",
+            "description" : "Domain selector (services or osds).",
+            "required" : true,
+            "example" : "osds"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service ID or OSD daemon ID.",
+            "required" : true,
+            "example" : "45"
+          } ],
+          "failure_modes" : [ "404 if the mapping is invalid", "409 if a conflicting task is already queued", "500 if the restart fails" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Verify the mapping via GET /servers/{serverId}/services before retrying."
+          }, {
+            "code" : "409",
+            "action" : "Wait for other tasks to finish."
+          }, {
+            "code" : "500",
+            "action" : "Inspect logs on the server; resolve issues before running again."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Per-server service/OSD restart"
+          },
+          "related_endpoints" : [ "/servers/{serverId}/services/{type}/{serviceId}/start", "/servers/{serverId}/services/{type}/{serviceId}/stop" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34489,6 +34715,47 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Start a specific service or OSD on a given server, disambiguating by type.",
+          "usage" : [ "Start an OSD process on its host after maintenance.", "Bring a specific service replica online." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Target server ID.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "type",
+            "in" : "path",
+            "description" : "Domain selector (services or osds).",
+            "required" : true,
+            "example" : "osds"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service ID or OSD daemon ID.",
+            "required" : true,
+            "example" : "45"
+          } ],
+          "failure_modes" : [ "404 if the specified ID is not associated with the server", "409 if another control action conflicts" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Fetch the server's service/OSD list and retry with a valid ID."
+          }, {
+            "code" : "409",
+            "action" : "Retry after existing operations complete."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Per-server service/OSD start"
+          },
+          "related_endpoints" : [ "/servers/{serverId}/services/{type}/{serviceId}/stop", "/servers/{serverId}/services/{type}/{serviceId}/restart" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -34529,6 +34796,47 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Stop a specific service or OSD instance on a server, identified by type and ID.",
+          "usage" : [ "Drain an OSD or service prior to maintenance.", "Temporarily disable a daemon causing issues." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "serverId",
+            "in" : "path",
+            "description" : "Target server ID.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "type",
+            "in" : "path",
+            "description" : "Domain selector (services or osds).",
+            "required" : true,
+            "example" : "services"
+          }, {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Service or OSD ID.",
+            "required" : true,
+            "example" : "87"
+          } ],
+          "failure_modes" : [ "404 if the mapping is invalid", "409 if another control task is in progress" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the server's service list and retry."
+          }, {
+            "code" : "409",
+            "action" : "Wait for other tasks to complete before reissuing the stop."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 600,
+            "note" : "Per-server service/OSD stop"
+          },
+          "related_endpoints" : [ "/servers/{serverId}/services/{type}/{serviceId}/start", "/servers/{serverId}/services/{type}/{serviceId}/restart" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
