@@ -28,7 +28,7 @@ logger = logging.getLogger(__name__)
 try:
     from croit_log_tools import (
         handle_log_search,
-        handle_log_monitor,
+        handle_log_check,
         LOG_SEARCH_TOOLS
     )
     LOG_TOOLS_AVAILABLE = True
@@ -1084,8 +1084,8 @@ Valid filter ops are:
         if self.enable_log_tools:
             if name == "croit_log_search":
                 return await self._handle_log_search(arguments)
-            elif name == "croit_log_monitor":
-                return await self._handle_log_monitor(arguments)
+            elif name == "croit_log_check":
+                return await self._handle_log_check(arguments)
         if name == self.resolve_references_tool:
             resolved = self._resolve_reference_schema(
                 ref_path=arguments["reference_path"]
@@ -1239,8 +1239,8 @@ Valid filter ops are:
         if self.enable_log_tools:
             if name == "croit_log_search":
                 return await self._handle_log_search(arguments)
-            elif name == "croit_log_monitor":
-                return await self._handle_log_monitor(arguments)
+            elif name == "croit_log_check":
+                return await self._handle_log_check(arguments)
 
         if name == self.resolve_references_tool:
             resolved = self._resolve_reference_schema(
@@ -1317,8 +1317,8 @@ Valid filter ops are:
         if self.enable_log_tools:
             if name == "croit_log_search":
                 return await self._handle_log_search(arguments)
-            elif name == "croit_log_monitor":
-                return await self._handle_log_monitor(arguments)
+            elif name == "croit_log_check":
+                return await self._handle_log_check(arguments)
 
         # Handle base tools
         if name == self.list_endpoints_tool:
@@ -1350,8 +1350,8 @@ Valid filter ops are:
         if self.enable_log_tools:
             if name == "croit_log_search":
                 return await self._handle_log_search(arguments)
-            elif name == "croit_log_monitor":
-                return await self._handle_log_monitor(arguments)
+            elif name == "croit_log_check":
+                return await self._handle_log_check(arguments)
 
         if name.startswith("manage_"):
             return await self._handle_category_tool(name, arguments)
@@ -1372,8 +1372,8 @@ Valid filter ops are:
 
         return await handle_log_search(arguments, host, port)
 
-    async def _handle_log_monitor(self, arguments: Dict) -> dict[str, Any]:
-        """Handle log monitor tool call"""
+    async def _handle_log_check(self, arguments: Dict) -> dict[str, Any]:
+        """Handle log check tool call"""
         # Extract host and port from self.host
         import re
         match = re.match(r'https?://([^:]+):?(\d+)?', self.host)
@@ -1384,7 +1384,7 @@ Valid filter ops are:
             host = self.host
             port = 8080
 
-        return await handle_log_monitor(arguments, host, port)
+        return await handle_log_check(arguments, host, port)
 
     async def _handle_category_tool(
         self,

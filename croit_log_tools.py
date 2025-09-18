@@ -436,54 +436,78 @@ async def handle_log_search(arguments: Dict, host: str, port: int = 8080) -> Dic
             "error": str(e)
         }
 
-async def handle_log_monitor(arguments: Dict, host: str, port: int = 8080) -> Dict[str, Any]:
-    """Handle log monitoring tool call"""
+async def handle_log_check(arguments: Dict, host: str, port: int = 8080) -> Dict[str, Any]:
+    """
+    Check log conditions immediately (snapshot) - suitable for LLMs
+    Returns results immediately instead of monitoring for a duration
+    """
 
     conditions = arguments.get('conditions', [])
-    duration = arguments.get('duration', 60)
     alert_threshold = arguments.get('threshold', 5)
+    time_window = arguments.get('time_window', 300)  # Check last 5 minutes by default
     api_token = arguments.get('api_token')
 
     if not conditions:
         return {
             "code": 400,
-            "error": "Monitoring conditions are required"
+            "error": "Conditions are required"
         }
 
     try:
         client = CroitLogSearchClient(host, port, api_token)
         alerts = []
-        start_time = datetime.now()
+        checks = []
 
-        while (datetime.now() - start_time).seconds < duration:
-            for condition in conditions:
-                result = await client.search_logs(condition, limit=100)
+        # Check each condition ONCE
+        for condition in conditions:
+            # Add time window to condition
+            enhanced_condition = f"{condition} in the last {time_window} seconds"
 
-                if result['total_count'] >= alert_threshold:
-                    alerts.append({
-                        'condition': condition,
-                        'count': result['total_count'],
-                        'timestamp': datetime.now().isoformat(),
-                        'severity': result['insights']['severity']
-                    })
+            result = await client.search_logs(enhanced_condition, limit=100)
 
-            await asyncio.sleep(5)  # Check every 5 seconds
+            check_result = {
+                'condition': condition,
+                'count': result['total_count'],
+                'threshold': alert_threshold,
+                'triggered': result['total_count'] >= alert_threshold,
+                'severity': result['insights']['severity'] if result['total_count'] > 0 else 'none',
+                'timestamp': datetime.now().isoformat()
+            }
+
+            checks.append(check_result)
+
+            if check_result['triggered']:
+                alerts.append({
+                    'condition': condition,
+                    'count': result['total_count'],
+                    'severity': result['insights']['severity'],
+                    'sample_logs': result['results'][:3] if result['results'] else []
+                })
 
         return {
             "code": 200,
             "result": {
-                "monitoring_duration": duration,
-                "conditions": conditions,
-                "alerts": alerts
+                "checks": checks,
+                "alerts": alerts,
+                "summary": f"{len(alerts)} of {len(conditions)} conditions triggered",
+                "time_window": f"Last {time_window} seconds",
+                "recommendation": "Run again later to check for changes" if alerts else "All clear"
             }
         }
 
     except Exception as e:
-        logger.error(f"Log monitoring failed: {e}")
+        logger.error(f"Log check failed: {e}")
         return {
             "code": 500,
             "error": str(e)
         }
+
+# Keep for backwards compatibility but mark as deprecated
+async def handle_log_monitor(arguments: Dict, host: str, port: int = 8080) -> Dict[str, Any]:
+    """DEPRECATED: Use handle_log_check instead - this blocks for too long"""
+    # Redirect to log_check with a warning
+    logger.warning("handle_log_monitor is deprecated - using handle_log_check instead")
+    return await handle_log_check(arguments, host, port)
 
 # Tool definitions for MCP
 LOG_SEARCH_TOOLS = [
@@ -511,29 +535,29 @@ LOG_SEARCH_TOOLS = [
         }
     },
     {
-        "name": "croit_log_monitor",
-        "description": "Monitor Croit logs for specific conditions in real-time",
+        "name": "croit_log_check",
+        "description": "Check log conditions immediately (snapshot). Returns which conditions are currently triggered without blocking.",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "conditions": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of conditions to monitor (natural language)"
-                },
-                "duration": {
-                    "type": "integer",
-                    "default": 60,
-                    "description": "Monitoring duration in seconds"
+                    "description": "List of conditions to check (natural language)"
                 },
                 "threshold": {
                     "type": "integer",
                     "default": 5,
                     "description": "Alert threshold (number of matching logs)"
                 },
+                "time_window": {
+                    "type": "integer",
+                    "default": 300,
+                    "description": "Time window to check in seconds (default: 5 minutes)"
+                },
                 "api_token": {
                     "type": "string",
-                    "description": "Optional API token for authentication"
+                    "description": "Optional API token"
                 }
             },
             "required": ["conditions"]
