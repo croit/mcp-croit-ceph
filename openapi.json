@@ -22358,6 +22358,69 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Provision an NVMe-oF disk backed by either a Ceph RBD image or a DAOS object.",
+          "usage" : [ "Expose a freshly created RBD image to NVMe-oF hosts via selected subsystems.", "Attach an existing DAOS disk to NVMe-oF after validating cluster prerequisites." ],
+          "response_shape" : "ManagedThreadTask",
+          "request_parameters" : [ {
+            "name" : "type",
+            "in" : "body",
+            "description" : "NVMe-oF backend type: CEPH or DAOS.",
+            "required" : true,
+            "example" : "CEPH"
+          }, {
+            "name" : "gatewayId",
+            "in" : "body",
+            "description" : "Gateway cluster ID hosting the disk.",
+            "required" : true,
+            "example" : "1"
+          }, {
+            "name" : "subsystems[]",
+            "in" : "body",
+            "description" : "Subsystem IDs to attach immediately.",
+            "required" : true,
+            "example" : "[12]"
+          }, {
+            "name" : "pool/image",
+            "in" : "body",
+            "description" : "Ceph pool and RBD image (required for CEPH type).",
+            "required" : false,
+            "example" : "pool=nvme,image=lun01"
+          }, {
+            "name" : "daosDisk/daosId",
+            "in" : "body",
+            "description" : "Either reference an existing DAOS disk or provide DAOS cluster + pool/container info.",
+            "required" : false,
+            "example" : "daosDisk=42"
+          }, {
+            "name" : "blockSize",
+            "in" : "body",
+            "description" : "Block size in bytes (required for DAOS and optional override for CEPH).",
+            "required" : false,
+            "example" : "4096"
+          } ],
+          "failure_modes" : [ "400 if namespaces are supplied, required fields are missing, or validation checks fail (e.g. DAOS disk attached to multiple subsystems)", "404 if the gateway, subsystem, DAOS disk, or NIC references do not exist", "200 ManagedThreadTask(status=FAILED) if nvmeof-target reconfiguration fails" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Adjust the payload (remove namespace, supply mandatory fields, ensure blockSize is 512-aligned) and retry."
+          }, {
+            "code" : "404",
+            "action" : "Refresh NVMe-oF inventories to pick valid IDs before resubmitting."
+          }, {
+            "code" : "200",
+            "action" : "Inspect the ManagedThreadTask log and NVMe-oF configurator output, fix host issues, then rerun the task."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "NVMe-oF disk provisioning"
+          },
+          "related_endpoints" : [ "/gateways/nvmeof/disks", "/gateways/nvmeof/subsystems/{subsystemId}/attach-disks" ],
+          "postprocessing_hint" : "Poll GET /gateways/nvmeof/disks to confirm the disk appears with the expected subsystem bindings.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -25470,6 +25533,33 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Enable or disable automatic offsite configuration backups.",
+          "usage" : [ "Toggle cloud backups from the maintenance settings view.", "Disable backups temporarily before entering offline maintenance mode." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "enabled",
+            "in" : "body",
+            "description" : "true to turn on cloud backups, false to disable them.",
+            "required" : false,
+            "example" : "true"
+          } ],
+          "failure_modes" : [ "400 if enabling backups while the appliance runs in offline mode" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Switch the system back to online mode or keep backups disabled."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 86400,
+            "note" : "Configuration toggles"
+          },
+          "related_endpoints" : [ "/maintenance/config-backups", "/maintenance/config-backups/create", "/maintenance/config-backups/generate-new-key" ],
+          "postprocessing_hint" : "After turning backups on, prompt the administrator to immediately generate and store the encryption key.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "get" : {
@@ -25539,6 +25629,29 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Trigger an immediate cloud backup using the current encryption key.",
+          "usage" : [ "Run after large configuration changes to capture the new state.", "Use when the UI indicates the last automatic backup failed." ],
+          "response_shape" : "ManagedTask",
+          "failure_modes" : [ "400 if cloud backups are disabled in offline mode", "200 ManagedTask(status=FAILED) if the backup job encounters errors" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Switch the appliance back to online mode or keep backups disabled."
+          }, {
+            "code" : "200",
+            "action" : "Inspect the managed task log; resolve the underlying issue before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "On-demand backup"
+          },
+          "related_endpoints" : [ "/maintenance/config-backups", "/maintenance/config-backups/generate-new-key" ],
+          "postprocessing_hint" : "Stream task progress to the UI and surface the resulting timestamp and checksum once finished.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -25561,6 +25674,26 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Rotate the encryption key used for cloud configuration backups.",
+          "usage" : [ "Run after a key compromise to generate a fresh encryption key.", "Rotate keys during scheduled security maintenance before triggering new backups." ],
+          "response_shape" : "ManagedTask",
+          "failure_modes" : [ "200 ManagedTask(status=SUCCEEDED) always returns with the new key ID" ],
+          "error_handling" : [ {
+            "code" : "200",
+            "action" : "Read task messages to retrieve and securely store the new key identifier."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 4,
+            "window_seconds" : 86400,
+            "note" : "Key rotation"
+          },
+          "related_endpoints" : [ "/maintenance/config-backups", "/maintenance/config-backups/create" ],
+          "postprocessing_hint" : "Display the new key UUID and instruct operators to download the key material immediately.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -27519,6 +27652,70 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Update pool metadata, quotas, or replication settings without recreating the pool.",
+          "usage" : [ "Adjust pg_num, quotas, or CRUSH rules during capacity planning.", "Rename pools or toggle delete protection after confirming migration plans." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "name",
+            "in" : "body",
+            "description" : "Optional new pool name (no commas allowed).",
+            "required" : false,
+            "example" : "rbd-prod"
+          }, {
+            "name" : "pgNum",
+            "in" : "body",
+            "description" : "Target pg_num/pgp_num; triggers ceph osd pool set commands.",
+            "required" : false,
+            "example" : "256"
+          }, {
+            "name" : "quotaMaxBytes",
+            "in" : "body",
+            "description" : "Pool byte quota; 0 disables the limit.",
+            "required" : false,
+            "example" : "1099511627776"
+          }, {
+            "name" : "unprotect",
+            "in" : "body",
+            "description" : "true to clear the delete protection flag for 15 minutes.",
+            "required" : false,
+            "example" : "true"
+          }, {
+            "name" : "compression",
+            "in" : "body",
+            "description" : "Compression mode and algorithm overrides.",
+            "required" : false,
+            "example" : "{\"mode\":\"aggressive\",\"algorithm\":\"zstd\"}"
+          } ],
+          "path_parameters" : [ {
+            "name" : "name",
+            "in" : "path",
+            "description" : "Current pool name.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "400 if the payload is invalid (e.g. new name contains commas)", "404 if the pool cannot be found", "500 if Ceph rejects configuration changes (quota, pg updates, CRUSH adjustments)" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Fix the offending field (rename formatting, conflicting flags) and resubmit."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the pool list to select an existing pool."
+          }, {
+            "code" : "500",
+            "action" : "Review Ceph command output, ensure the cluster is healthy, then retry in smaller increments if needed."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "Pool configuration changes"
+          },
+          "related_endpoints" : [ "/pools", "/pools/{name}/details", "/pools/{name}/compression" ],
+          "postprocessing_hint" : "Monitor ceph health for remapping/backfill and refresh GET /pools to confirm updated stats.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "delete" : {
@@ -27679,6 +27876,33 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Queue a deep scrub for the pool to read and verify all data blocks.",
+          "usage" : [ "Trigger after hardware issues or inconsistent PGs to perform a thorough validation.", "Schedule less frequent deep scrubs on mission-critical pools between maintenance windows." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "name",
+            "in" : "path",
+            "description" : "Pool name targeted for deep scrub.",
+            "required" : true,
+            "example" : "ec-archive"
+          } ],
+          "failure_modes" : [ "500 if Ceph refuses the deep scrub (pool missing, deep scrub throttled, or cluster unhealthy)" ],
+          "error_handling" : [ {
+            "code" : "500",
+            "action" : "Ensure the cluster is healthy and deep-scrub is permitted, then resubmit when load is low."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 4,
+            "window_seconds" : 86400,
+            "note" : "Deep scrub scheduling"
+          },
+          "related_endpoints" : [ "/pools/{name}", "/cluster/status" ],
+          "postprocessing_hint" : "Watch ceph health detail for deep-scrub progress and follow up on any reported inconsistencies.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -27762,6 +27986,36 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Enable Ceph erasure-coded overwrites so the pool can host RBD or CephFS workloads.",
+          "usage" : [ "Run after upgrading legacy OSDs when the UI shows erasureCodingOverwriteSupportMissing=true.", "Execute immediately after creating an EC pool if the automatic flag enable failed." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "name",
+            "in" : "path",
+            "description" : "Pool name as returned by GET /pools.",
+            "required" : true,
+            "example" : "ec-data"
+          } ],
+          "failure_modes" : [ "404 if the pool cannot be found", "500 if Ceph rejects the command (e.g. OSDs not BlueStore or cluster unavailable)" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Reload the pool list and retry with an existing pool name."
+          }, {
+            "code" : "500",
+            "action" : "Inspect ceph osd logs, ensure all target OSDs are BlueStore, then rerun the request."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 3600,
+            "note" : "EC overwrite toggles"
+          },
+          "related_endpoints" : [ "/pools/{name}", "/pools/{name}/details" ],
+          "postprocessing_hint" : "Refresh GET /pools/{name} to confirm erasureCodingOverwriteSupportMissing cleared.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -27785,6 +28039,33 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Queue a standard scrub for the pool to validate replica consistency.",
+          "usage" : [ "Run after resolving object errors to force Ceph to rescan the pool.", "Schedule periodic health checks for critical pools outside the automatic window." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "name",
+            "in" : "path",
+            "description" : "Pool name targeted for scrubbing.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "500 if Ceph refuses the scrub (pool missing, command throttled, or mon connection failed)" ],
+          "error_handling" : [ {
+            "code" : "500",
+            "action" : "Check ceph health detail for active scrubs or errors, wait for the cluster to stabilize, then retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "Manual pool scrubs"
+          },
+          "related_endpoints" : [ "/pools/{name}", "/cluster/status" ],
+          "postprocessing_hint" : "Monitor ceph health detail until the scrub completes without new inconsistencies.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -27815,6 +28096,40 @@
             "description" : "Created"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Invalidate the RBD cache for a specific namespace within the pool.",
+          "usage" : [ "Refresh cached metadata after editing images in a single tenant namespace.", "Call after restoring from backup scripts that bypass croit caching." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Namespace to clear; omit for default namespace.",
+            "required" : false,
+            "example" : "tenant-a"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool hosting the namespace.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "200 even if the namespace cache is already empty" ],
+          "error_handling" : [ {
+            "code" : "200",
+            "action" : "No follow-up required; next read repopulates the cache."
+          } ],
+          "retry_strategy" : "manual_refresh",
+          "rate_limit" : {
+            "limit" : 90,
+            "window_seconds" : 3600,
+            "note" : "Namespace cache invalidation"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds", "/pools/{pool}/rbd-namespaces" ],
+          "postprocessing_hint" : "Issue a GET with details=true to rebuild cache entries on demand.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -27836,6 +28151,33 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Invalidate the RBD cache for all namespaces in the pool.",
+          "usage" : [ "Force croit to refresh image metadata after bulk CLI changes.", "Clear stale size/feature information before audits." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool whose cache should be flushed.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "200 even if no cache entries existed" ],
+          "error_handling" : [ {
+            "code" : "200",
+            "action" : "No action needed; subsequent GET calls repopulate the cache."
+          } ],
+          "retry_strategy" : "manual_refresh",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 3600,
+            "note" : "Cache invalidation"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds", "/pools/{pool}/rbds/{rbd}" ],
+          "postprocessing_hint" : "Follow with GET requests to rebuild the cache for affected workloads.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -28333,6 +28675,42 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Remove an empty RBD namespace from the pool.",
+          "usage" : [ "Clean up deprecated namespaces after migrating images to a new structure.", "Delete temporary namespaces once automation has drained them." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool containing the namespace.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "namespace",
+            "in" : "path",
+            "description" : "Namespace identifier to remove.",
+            "required" : true,
+            "example" : "vm"
+          } ],
+          "failure_modes" : [ "400 if the namespace still contains images", "500 if Ceph rejects the deletion (namespace missing or command failed)" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "List images in the namespace, delete them first, then retry."
+          }, {
+            "code" : "500",
+            "action" : "Verify the namespace still exists via rbd namespace list and reissue the request once the cluster is healthy."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 86400,
+            "note" : "Namespace cleanup"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbd-namespaces", "/pools/{pool}/rbds" ],
+          "postprocessing_hint" : "Refresh GET /pools/{pool}/rbd-namespaces to confirm the namespace disappeared.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "put" : {
@@ -28427,6 +28805,67 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Create a new RBD image within the selected pool (optionally creating the namespace).",
+          "usage" : [ "Provision a backing volume for a VM or application before mapping it to clients.", "Bootstrap automation that prepares RBDs for NVMe-oF or iSCSI exports." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "name",
+            "in" : "body",
+            "description" : "New image name.",
+            "required" : true,
+            "example" : "vm-001"
+          }, {
+            "name" : "size",
+            "in" : "body",
+            "description" : "Image size in bytes (must be >0).",
+            "required" : true,
+            "example" : "268435456000"
+          }, {
+            "name" : "features[]",
+            "in" : "body",
+            "description" : "Optional RBD feature list (e.g. layering, exclusive-lock).",
+            "required" : false,
+            "example" : "[\"exclusive-lock\",\"object-map\"]"
+          }, {
+            "name" : "namespace",
+            "in" : "body",
+            "description" : "Optional namespace; created on the fly if missing.",
+            "required" : false,
+            "example" : "prod"
+          }, {
+            "name" : "erasureCodedPool",
+            "in" : "body",
+            "description" : "Optional metadata-only pool when using EC data pool offload.",
+            "required" : false,
+            "example" : "ec-data"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Target pool for the image.",
+            "required" : true,
+            "example" : "rbd"
+          } ],
+          "failure_modes" : [ "409 if an image with the same name already exists", "500 if Ceph refuses creation (e.g. invalid namespace or pool)" ],
+          "error_handling" : [ {
+            "code" : "409",
+            "action" : "Choose a unique image name or delete the existing one."
+          }, {
+            "code" : "500",
+            "action" : "Validate pool/namespace existence and review Ceph logs before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 3600,
+            "note" : "RBD provisioning"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds", "/pools/{pool}/rbds/{rbd}", "/pools/{pool}/rbds/{rbd}/snapshots" ],
+          "postprocessing_hint" : "Trigger GET /pools/{pool}/rbds with details=true to confirm the image appears with correct features.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -28570,6 +29009,68 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Delete an RBD image after validating confirmations and dependencies.",
+          "usage" : [ "Remove retired images once snapshots are purged and consumers are detached.", "Automate cleanup workflows after migrating workloads to a new pool." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace; omit for default.",
+            "required" : false,
+            "example" : "prod"
+          }, {
+            "name" : "pool",
+            "in" : "body",
+            "description" : "Repeat the pool name for confirmation.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "body",
+            "description" : "Repeat the image name for confirmation.",
+            "required" : true,
+            "example" : "vm-001"
+          }, {
+            "name" : "thisWillDeleteData",
+            "in" : "body",
+            "description" : "Must equal the confirmation phrase to proceed.",
+            "required" : true,
+            "example" : "I'm really sure that I want to delete this"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool hosting the image.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "RBD image name to delete.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "failure_modes" : [ "400 if confirmation fields or namespace do not match the request path", "400 if the image still has snapshots", "500 if Ceph rejects the deletion (image already gone or cluster unhealthy)" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Fix the confirmation payload, remove snapshots, and reissue the deletion."
+          }, {
+            "code" : "500",
+            "action" : "Review the ManagedTask log and Ceph health; retry after resolving cluster errors."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 6,
+            "window_seconds" : 3600,
+            "note" : "RBD deletions"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds", "/pools/{pool}/rbds/{rbd}/snapshots", "/gateways/iscsi/disks" ],
+          "postprocessing_hint" : "Stream the ManagedTask output to the UI and refresh GET /pools/{pool}/rbds once it finishes.",
+          "idempotent" : true,
+          "requires_confirmation" : true,
+          "confirmation_reason" : "Deleting an RBD image permanently removes all data."
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -28606,6 +29107,46 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Invalidate cached metadata for a single RBD image.",
+          "usage" : [ "Clear stale size or feature info after manual rbd CLI operations.", "Use during troubleshooting when the UI shows outdated data for one image." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace for the image.",
+            "required" : false,
+            "example" : "tenant-a"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool containing the image.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Image name being refreshed.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "failure_modes" : [ "200 even if no cache entry existed" ],
+          "error_handling" : [ {
+            "code" : "200",
+            "action" : "No additional handling required; trigger a GET to repopulate metadata."
+          } ],
+          "retry_strategy" : "manual_refresh",
+          "rate_limit" : {
+            "limit" : 120,
+            "window_seconds" : 3600,
+            "note" : "Image cache invalidation"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}", "/pools/{pool}/rbds" ],
+          "postprocessing_hint" : "Next GET request will reconstruct the cache entry; avoid back-to-back invalidations.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -28650,6 +29191,46 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Start a background flattening job to detach a clone from its parent snapshot.",
+          "usage" : [ "Run before deleting or expiring the parent snapshot chain.", "Reduce read amplification on steady-state clones kept long term." ],
+          "response_shape" : "ManagedTask",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace of the clone.",
+            "required" : false,
+            "example" : "tenant-a"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool containing the clone.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Clone image name to flatten.",
+            "required" : true,
+            "example" : "vm-001"
+          } ],
+          "failure_modes" : [ "200 ManagedTask(status=FAILED) if flattening encounters errors or the clone disappears" ],
+          "error_handling" : [ {
+            "code" : "200",
+            "action" : "Monitor the ManagedTask log; resolve underlying Ceph issues and rerun if needed."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 86400,
+            "note" : "Clone flatten operations"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}", "/pools/{pool}/rbds/{rbd}/snapshots/{snap}/clone" ],
+          "postprocessing_hint" : "Wait for the ManagedTask to complete and then verify the parent snapshot can be safely removed.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -29089,6 +29670,52 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Remove an RBD snapshot to free storage or allow subsequent image deletion.",
+          "usage" : [ "Clean up snapshots after confirming they are no longer needed for rollback.", "Run before deleting the parent image, because deletions require all snapshots to be gone." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace if the image is not in the default.",
+            "required" : false,
+            "example" : "prod"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Pool hosting the snapshot.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Parent image name.",
+            "required" : true,
+            "example" : "vm-001"
+          }, {
+            "name" : "snap",
+            "in" : "path",
+            "description" : "Snapshot identifier to delete.",
+            "required" : true,
+            "example" : "pre-upgrade"
+          } ],
+          "failure_modes" : [ "500 if Ceph refuses to delete the snapshot (still protected or clones depend on it)" ],
+          "error_handling" : [ {
+            "code" : "500",
+            "action" : "Unprotect the snapshot and detach dependent clones before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 3600,
+            "note" : "Snapshot deletions"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}/snapshots", "/pools/{pool}/rbds/{rbd}", "/pools/{pool}/rbds/{rbd}/snapshots/{snap}/clone" ],
+          "postprocessing_hint" : "Refresh GET /pools/{pool}/rbds/{rbd} to verify the snapshot list updated.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       },
       "put" : {
@@ -29187,6 +29814,73 @@
           "201" : {
             "description" : "Created"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Clone an RBD snapshot into a writable image, optionally in another pool or namespace.",
+          "usage" : [ "Provision a new VM from a golden snapshot without copying data.", "Create point-in-time test environments while keeping linkage to the parent image." ],
+          "response_shape" : "void",
+          "request_parameters" : [ {
+            "name" : "namespace",
+            "in" : "query",
+            "description" : "Optional namespace of the source snapshot.",
+            "required" : false,
+            "example" : "prod"
+          }, {
+            "name" : "pool",
+            "in" : "body",
+            "description" : "Destination pool for the clone.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "name",
+            "in" : "body",
+            "description" : "New clone name.",
+            "required" : true,
+            "example" : "vm-001"
+          }, {
+            "name" : "namespace",
+            "in" : "body",
+            "description" : "Destination namespace (requires Mimic+ clients for cross-namespace clones).",
+            "required" : false,
+            "example" : "tenant-a"
+          } ],
+          "path_parameters" : [ {
+            "name" : "pool",
+            "in" : "path",
+            "description" : "Source pool containing the snapshot.",
+            "required" : true,
+            "example" : "rbd"
+          }, {
+            "name" : "rbd",
+            "in" : "path",
+            "description" : "Source image name.",
+            "required" : true,
+            "example" : "golden-template"
+          }, {
+            "name" : "snap",
+            "in" : "path",
+            "description" : "Snapshot identifier to clone.",
+            "required" : true,
+            "example" : "2024-01-01"
+          } ],
+          "failure_modes" : [ "400 if clone v2 is required but min-compat-client is too low", "500 if Ceph refuses the clone (snapshot missing, insufficient permissions)" ],
+          "error_handling" : [ {
+            "code" : "400",
+            "action" : "Upgrade clients or run 'ceph osd set-require-min-compat-client mimic' before retrying."
+          }, {
+            "code" : "500",
+            "action" : "Verify the snapshot exists and is protected when required, then retry."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 3600,
+            "note" : "RBD clone operations"
+          },
+          "related_endpoints" : [ "/pools/{pool}/rbds/{rbd}", "/pools/{pool}/rbds/{rbd}/snapshots" ],
+          "postprocessing_hint" : "List the destination pool to confirm the clone appears and schedule flattening if long-lived.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -33242,6 +33936,36 @@
             "description" : "No Content"
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Remove a server from croit inventory after services and dependencies are cleared.",
+          "usage" : [ "Retire hardware that has been physically removed from the cluster.", "Clean up failed installations before re-registering the host." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server identifier from GET /servers.",
+            "required" : true,
+            "example" : "23"
+          } ],
+          "failure_modes" : [ "404 if the server is already gone", "400 if the server hosts DAOS resources", "400 if a monitor service is still assigned to the server" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Reload the server list to confirm removal and skip further action."
+          }, {
+            "code" : "400",
+            "action" : "Detach DAOS assignments or remove Ceph monitor services before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 12,
+            "window_seconds" : 86400,
+            "note" : "Server deletions"
+          },
+          "related_endpoints" : [ "/servers/{id}/services", "/servers/{id}/disks", "/servers/{id}/nics" ],
+          "postprocessing_hint" : "Update external inventory systems and reread GET /servers to ensure the host disappeared.",
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "admin" ]
       }
     },
@@ -33392,6 +34116,42 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Remove a disk record from a server after hardware replacement or removal.",
+          "usage" : [ "Clear stale entries when a disk was taken out but the hardware scan has not run yet.", "Reset the inventory before reimporting a disk with a new role." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server ID.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "diskId",
+            "in" : "path",
+            "description" : "Disk identifier.",
+            "required" : true,
+            "example" : "145"
+          } ],
+          "failure_modes" : [ "404 if the disk ID is not associated with the server", "400 if DAOS currently uses the disk" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Re-run hardware detection or list disks to confirm valid IDs."
+          }, {
+            "code" : "400",
+            "action" : "Detach the disk from DAOS engines before retrying the deletion."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 3600,
+            "note" : "Disk inventory cleanup"
+          },
+          "related_endpoints" : [ "/servers/{id}/disks", "/servers/{id}/disks/{diskId}/smart" ],
+          "postprocessing_hint" : "Run hardware re-detect or import to refresh disk listings after removal.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -33617,6 +34377,44 @@
           "204" : {
             "description" : "No Content"
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Remove a network interface record from the server inventory (and tear down virtual links).",
+          "usage" : [ "Clean up NIC entries after replacing hardware or undoing temporary bonding.", "Delete misconfigured virtual interfaces before reapplying network settings." ],
+          "response_shape" : "void",
+          "path_parameters" : [ {
+            "name" : "id",
+            "in" : "path",
+            "description" : "Server ID owning the NIC.",
+            "required" : true,
+            "example" : "23"
+          }, {
+            "name" : "nicId",
+            "in" : "path",
+            "description" : "Identifier of the NIC to remove.",
+            "required" : true,
+            "example" : "58"
+          } ],
+          "failure_modes" : [ "404 if the NIC is not attached to the server", "400 if DAOS still references the NIC", "200 with warning when the NIC IP is used by a monitor service (requires manual acknowledgement)" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the NIC list and choose a valid identifier."
+          }, {
+            "code" : "400",
+            "action" : "Detach the NIC from DAOS engines before retrying."
+          }, {
+            "code" : "200",
+            "action" : "If an ignorable warning cites a Ceph monitor IP, remove the monitor or change its address first."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 24,
+            "window_seconds" : 3600,
+            "note" : "NIC deletions"
+          },
+          "postprocessing_hint" : "Trigger DHCP regeneration and re-run hardware detection to refresh NIC state.",
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       }
@@ -35095,7 +35893,7 @@
         "x-required-permissions" : [ "admin" ]
       },
       "get" : {
-        "summary" : "Get configuration of an iSCSI gateway",
+        "summary" : "Inspect the ceph-iscsi gateway configuration.",
         "operationId" : "IscsiServiceResource_getIscsiGatewayConfig",
         "tags" : [ "services" ],
         "parameters" : [ {
@@ -35121,6 +35919,40 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "Fetch the ceph-iscsi configuration snapshot for the selected gateway.",
+          "usage" : [ "Load the gateway detail view before presenting targets and clients.", "Refresh after finishing gateway maintenance or changing the active target." ],
+          "response_shape" : "IscsiGatewayConfig",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Gateway service identifier.",
+            "required" : true,
+            "example" : "1"
+          } ],
+          "failure_modes" : [ "200 with empty clients/disks lists when no exports are configured", "500 if reading gateway.conf from the Ceph iSCSI config pool fails" ],
+          "error_handling" : [ {
+            "code" : "200",
+            "action" : "Display an empty state and guide the user to add disks or clients."
+          }, {
+            "code" : "500",
+            "action" : "Check Ceph health and ensure the iSCSI config pool exists before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 300,
+            "note" : "Gateway configuration refresh"
+          },
+          "cache_hint" : "short-lived",
+          "recommended_poll_interval" : {
+            "value" : 30,
+            "unit" : "seconds"
+          },
+          "related_endpoints" : [ "/services/iscsi", "/services/iscsi/{serviceId}/disks" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "admin" ]
       },
@@ -35698,7 +36530,7 @@
     },
     "/services/iscsi/{serviceId}/disks" : {
       "get" : {
-        "summary" : "Get configured iSCSI RBDs",
+        "summary" : "List iSCSI RBD exports for a gateway.",
         "operationId" : "IscsiServiceResource_getImages",
         "tags" : [ "services" ],
         "parameters" : [ {
@@ -35731,6 +36563,51 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "List RBD images exported by the iSCSI gateway, optionally with metadata.",
+          "usage" : [ "Populate the disks tab for an iSCSI gateway detail view.", "Refresh after adding, deleting or resizing LUNs." ],
+          "response_shape" : "IscsiImagesResponse",
+          "request_parameters" : [ {
+            "name" : "details",
+            "in" : "query",
+            "description" : "true to include per-disk metadata (pool, WWN, controls).",
+            "required" : false,
+            "default" : "false",
+            "example" : "true"
+          } ],
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "Gateway service identifier.",
+            "required" : true,
+            "example" : "1"
+          } ],
+          "failure_modes" : [ "200 with disks=[] when no exports exist", "404 if the gateway has no active servers to answer API requests", "500 if the ceph-iscsi API call fails or gateway.conf cannot be read" ],
+          "error_handling" : [ {
+            "code" : "200",
+            "action" : "Render an empty state and prompt creation of new exports."
+          }, {
+            "code" : "404",
+            "action" : "Refresh the gateway list and ensure at least one server is assigned and online."
+          }, {
+            "code" : "500",
+            "action" : "Inspect ceph-iscsi logs and verify API credentials before retrying."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 120,
+            "window_seconds" : 300,
+            "note" : "iSCSI disk inventory polling"
+          },
+          "cache_hint" : "short-lived",
+          "recommended_poll_interval" : {
+            "value" : 15,
+            "unit" : "seconds"
+          },
+          "related_endpoints" : [ "/services/iscsi/{serviceId}" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "viewer" ]
       }
@@ -36903,7 +37780,7 @@
         "x-required-permissions" : [ "admin" ]
       },
       "get" : {
-        "summary" : "Get an NFS cluster configuration.",
+        "summary" : "Retrieve the NFS cluster configuration snapshot.",
         "operationId" : "NfsServiceResource_getNfsGateway",
         "tags" : [ "services" ],
         "parameters" : [ {
@@ -36930,12 +37807,49 @@
             }
           }
         },
+        "x-llm-hints" : {
+          "purpose" : "Retrieve servers and exports configured for the NFS gateway cluster.",
+          "usage" : [ "Load the NFS cluster detail view for administrators.", "Refresh after modifying servers or exports to confirm the applied state." ],
+          "response_shape" : "NfsGatewayService",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "NFS cluster ID.",
+            "required" : true,
+            "example" : "12"
+          } ],
+          "failure_modes" : [ "404 if the service ID is unknown", "400 if the referenced service is not an NFS cluster", "200 with exports=[] and servers=[] when no configuration exists yet" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the service inventory and retry with an existing cluster ID."
+          }, {
+            "code" : "400",
+            "action" : "Ensure the selected service is of type nfs_gateway before proceeding."
+          }, {
+            "code" : "200",
+            "action" : "Display an empty state explaining that no servers or exports are assigned yet."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 30,
+            "window_seconds" : 300,
+            "note" : "NFS cluster detail refresh"
+          },
+          "cache_hint" : "short-lived",
+          "recommended_poll_interval" : {
+            "value" : 30,
+            "unit" : "seconds"
+          },
+          "related_endpoints" : [ "/services/nfs-gateways/{serviceId}/exports", "/services/nfs-gateways/{serviceId}/servers" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
+        },
         "x-required-permissions" : [ "viewer" ]
       }
     },
     "/services/nfs-gateways/{serviceId}/exports" : {
       "get" : {
-        "summary" : "Get exports of an NFS cluster.",
+        "summary" : "List exports belonging to the NFS cluster.",
         "operationId" : "NfsServiceResource_getNfsGatewayExports",
         "tags" : [ "services" ],
         "parameters" : [ {
@@ -36964,6 +37878,43 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "List exports defined for the NFS gateway cluster.",
+          "usage" : [ "Populate the exports tab in the NFS cluster view.", "Refresh after creating, updating or deleting an export." ],
+          "response_shape" : "array<NfsGatewayExport>",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "NFS cluster ID.",
+            "required" : true,
+            "example" : "12"
+          } ],
+          "failure_modes" : [ "404 if the service ID is unknown", "400 if the referenced service is not an NFS cluster", "200 [] when the cluster currently has no exports" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Verify the cluster still exists and retry."
+          }, {
+            "code" : "400",
+            "action" : "Ensure only NFS gateway IDs are used for this call."
+          }, {
+            "code" : "200",
+            "action" : "Show an empty state inviting the user to create exports."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 300,
+            "note" : "NFS export list polling"
+          },
+          "cache_hint" : "short-lived",
+          "recommended_poll_interval" : {
+            "value" : 15,
+            "unit" : "seconds"
+          },
+          "related_endpoints" : [ "/services/nfs-gateways/{serviceId}", "/services/nfs-gateways/{serviceId}/servers" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "viewer" ]
       },
@@ -37220,7 +38171,7 @@
     },
     "/services/nfs-gateways/{serviceId}/servers" : {
       "get" : {
-        "summary" : "Get servers that are part of this cluster.",
+        "summary" : "List server IDs assigned to the NFS cluster.",
         "operationId" : "NfsServiceResource_getNfsGatewayServers",
         "tags" : [ "services" ],
         "parameters" : [ {
@@ -37250,6 +38201,43 @@
               }
             }
           }
+        },
+        "x-llm-hints" : {
+          "purpose" : "List server IDs participating in the NFS gateway cluster.",
+          "usage" : [ "Populate the servers tab in the NFS cluster detail view.", "Refresh after adding or removing nodes from the cluster." ],
+          "response_shape" : "array<int>",
+          "path_parameters" : [ {
+            "name" : "serviceId",
+            "in" : "path",
+            "description" : "NFS cluster ID.",
+            "required" : true,
+            "example" : "12"
+          } ],
+          "failure_modes" : [ "404 if the service ID is unknown", "400 if the referenced service is not an NFS cluster", "200 [] when the cluster has no active servers" ],
+          "error_handling" : [ {
+            "code" : "404",
+            "action" : "Refresh the cluster list and retry with a current ID."
+          }, {
+            "code" : "400",
+            "action" : "Select a service of type nfs_gateway before calling this endpoint."
+          }, {
+            "code" : "200",
+            "action" : "Show an empty state indicating that no servers are assigned yet."
+          } ],
+          "retry_strategy" : "manual_retry",
+          "rate_limit" : {
+            "limit" : 60,
+            "window_seconds" : 300,
+            "note" : "NFS server membership polling"
+          },
+          "cache_hint" : "short-lived",
+          "recommended_poll_interval" : {
+            "value" : 30,
+            "unit" : "seconds"
+          },
+          "related_endpoints" : [ "/services/nfs-gateways/{serviceId}", "/services/nfs-gateways/{serviceId}/exports" ],
+          "idempotent" : true,
+          "requires_confirmation" : false
         },
         "x-required-permissions" : [ "viewer" ]
       }

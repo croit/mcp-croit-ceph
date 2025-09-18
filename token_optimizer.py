@@ -6,7 +6,8 @@ Provides utilities to reduce token consumption when dealing with large API respo
 
 import json
 import logging
-from typing import Any, Dict, List, Optional
+import re
+from typing import Any, Dict, List, Optional, Union
 
 logger = logging.getLogger(__name__)
 
@@ -204,6 +205,142 @@ class TokenOptimizer:
             summary["errors"] = error_items[:10]  # Max 10 errors
 
         return summary
+
+    @classmethod
+    def apply_filters(cls, data: Any, filters: Dict[str, Any]) -> Any:
+        """
+        Apply grep-like filters to response data.
+
+        Supported filter types:
+        - Simple equality: {"status": "error"}
+        - Multiple values: {"status": ["error", "warning"]}
+        - Regex pattern: {"name": "~ceph.*"}
+        - Numeric comparison: {"size": ">1000", "cpu": "<=80"}
+        - Text search: {"_text": "error"} (searches all string fields)
+        - Field existence: {"_has": "error_message"}
+
+        Args:
+            data: Response data (list or dict)
+            filters: Filter criteria
+
+        Returns:
+            Filtered data
+        """
+        if not filters or not data:
+            return data
+
+        # Convert single object to list for uniform processing
+        is_single = not isinstance(data, list)
+        items = [data] if is_single else data
+
+        filtered = []
+        for item in items:
+            if not isinstance(item, dict):
+                continue
+
+            if cls._item_matches_filters(item, filters):
+                filtered.append(item)
+
+        # Log filter effectiveness
+        if isinstance(data, list):
+            logger.info(f"Filtered from {len(data)} to {len(filtered)} items")
+
+        return filtered[0] if is_single and filtered else filtered
+
+    @classmethod
+    def _item_matches_filters(cls, item: Dict, filters: Dict) -> bool:
+        """Check if a single item matches all filter criteria."""
+        for key, value in filters.items():
+            # Special filter: text search across all fields
+            if key == "_text":
+                if not cls._text_search_in_item(item, value):
+                    return False
+                continue
+
+            # Special filter: field existence
+            if key == "_has":
+                fields = value if isinstance(value, list) else [value]
+                if not all(field in item for field in fields):
+                    return False
+                continue
+
+            # Regular field filtering
+            if key not in item:
+                return False
+
+            item_value = item[key]
+
+            # Regex pattern matching (starts with ~)
+            if isinstance(value, str) and value.startswith("~"):
+                pattern = value[1:]  # Remove ~ prefix
+                try:
+                    if not re.search(pattern, str(item_value), re.IGNORECASE):
+                        return False
+                except re.error:
+                    logger.warning(f"Invalid regex pattern: {pattern}")
+                    return False
+
+            # Numeric comparisons
+            elif isinstance(value, str) and any(op in value[:2] for op in [">=", "<=", "!=", ">", "<", "="]):
+                if not cls._numeric_comparison(item_value, value):
+                    return False
+
+            # Multiple allowed values (OR logic)
+            elif isinstance(value, list):
+                if item_value not in value:
+                    return False
+
+            # Simple equality
+            else:
+                if item_value != value:
+                    return False
+
+        return True
+
+    @classmethod
+    def _text_search_in_item(cls, item: Dict, search_text: str) -> bool:
+        """Search for text in all string fields of an item."""
+        search_lower = search_text.lower()
+
+        def search_in_value(value):
+            if isinstance(value, str):
+                return search_lower in value.lower()
+            elif isinstance(value, dict):
+                return any(search_in_value(v) for v in value.values())
+            elif isinstance(value, list):
+                return any(search_in_value(v) for v in value)
+            return False
+
+        return any(search_in_value(v) for v in item.values())
+
+    @classmethod
+    def _numeric_comparison(cls, value: Any, comparison: str) -> bool:
+        """Perform numeric comparison like '>100' or '<=50'."""
+        try:
+            # Extract operator and number
+            if comparison.startswith(">="):
+                op, num = ">=", float(comparison[2:])
+                return float(value) >= num
+            elif comparison.startswith("<="):
+                op, num = "<=", float(comparison[2:])
+                return float(value) <= num
+            elif comparison.startswith("!="):
+                op, num = "!=", float(comparison[2:])
+                return float(value) != num
+            elif comparison.startswith(">"):
+                op, num = ">", float(comparison[1:])
+                return float(value) > num
+            elif comparison.startswith("<"):
+                op, num = "<", float(comparison[1:])
+                return float(value) < num
+            elif comparison.startswith("="):
+                op, num = "=", float(comparison[1:])
+                return float(value) == num
+            else:
+                # Try direct numeric comparison
+                return float(value) == float(comparison)
+        except (ValueError, TypeError):
+            return False
 
     @classmethod
     def add_optimization_hints(cls, tool_description: str, endpoint_path: str) -> str:

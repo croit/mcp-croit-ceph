@@ -12,6 +12,31 @@ An MCP (Model Context Protocol) server for interacting with Croit Ceph clusters 
 
 ## Features
 
+### Automatic Token Optimization
+
+The MCP server automatically optimizes responses to reduce token consumption:
+- **Auto-limits**: Adds default limits (10-100 items) to list operations
+- **Smart truncation**: Large responses automatically truncated with metadata
+- **Optimization hints**: Tool descriptions include token-saving tips
+- **Response metadata**: Truncated responses include info on how to get more data
+
+Example: Instead of 500 services (50,000 tokens), you get 25 services + metadata (2,500 tokens)
+
+### Built-in Filtering (grep-like search)
+
+Filter API responses locally without multiple calls:
+- **Field filtering**: `_filter_status='error'` - exact match
+- **Regex patterns**: `_filter_name='~ceph.*'` - pattern matching
+- **Numeric comparisons**: `_filter_size='>1000'` - greater than
+- **Text search**: `_filter__text='timeout'` - search all text fields
+- **Field existence**: `_filter__has='error_message'` - has field
+- **Multiple values**: `_filter_status=['error','warning']` - OR logic
+
+Example: Find errors in 500 services with one call:
+```
+_filter_status='error' → Returns only 5 error services (99% token savings)
+```
+
 ### Hybrid Mode (Default) - 97% Fewer Tools!
 
 The new hybrid mode reduces the tool count from 580 individual endpoint tools to just **13 tools total**:

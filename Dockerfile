@@ -16,5 +16,6 @@ RUN useradd -m -u 1000 mcp
 USER mcp
 
 COPY mcp-croit-ceph.py /app/
+COPY token_optimizer.py /app/
 ENV MCP_ARGS=""
 ENTRYPOINT ["bash", "-c", "python /app/mcp-croit-ceph.py $MCP_ARGS"]

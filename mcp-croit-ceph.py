@@ -24,6 +24,32 @@ logging.basicConfig(
 )
 logger = logging.getLogger(__name__)
 
+# Try to import token_optimizer, fall back gracefully if not available
+try:
+    from token_optimizer import TokenOptimizer
+    TOKEN_OPTIMIZER_AVAILABLE = True
+except ImportError:
+    logger.warning("token_optimizer module not found, filtering and optimization disabled")
+    TOKEN_OPTIMIZER_AVAILABLE = False
+
+    # Create a dummy TokenOptimizer class with no-op methods
+    class TokenOptimizer:
+        @classmethod
+        def should_optimize(cls, url, method):
+            return False
+
+        @classmethod
+        def add_default_limit(cls, url, params):
+            return params
+
+        @classmethod
+        def truncate_response(cls, data, url):
+            return data
+
+        @classmethod
+        def apply_filters(cls, data, filters):
+            return data
+
 
 @dataclass
 class QueryParamInfo:
@@ -358,10 +384,14 @@ Valid filter ops are:
 
                 # Add token optimization hints for large data endpoints
                 if any(pattern in path.lower() for pattern in ['/list', '/all', '/export', '/stats', '/logs']):
-                    description += "\n\n💡 Token Optimization:"
+                    description += "\n\n💡 Token Optimization & Filters:"
                     description += "\n• Use limit=10 for initial exploration"
-                    description += "\n• Add filters to reduce data (e.g. status='error')"
-                    description += "\n• Large responses will be auto-truncated to 50 items"
+                    description += "\n• Filter by field: _filter_status='error'"
+                    description += "\n• Regex search: _filter_name='~ceph.*'"
+                    description += "\n• Numeric: _filter_size='>1000'"
+                    description += "\n• Text search: _filter__text='error'"
+                    description += "\n• Has field: _filter__has='error_message'"
+                    description += "\n• Large responses auto-truncated to 50 items"
 
                 description = description[:1200]  # Increased limit for examples and hints
 
@@ -424,7 +454,7 @@ Valid filter ops are:
         Given the OpenAPI spec of a single endpoint (including HTTP method), this will generate the ToolParameters.
         The ToolParameters describe the input schema for the tool, i.e. what request body and what path and query parameters are expected.
         """
-        schema = {"type": "object", "properties": {}, "required": []}
+        schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
         path_params: List[str] = []
         query_params: Dict[str, QueryParamInfo] = {}
 
@@ -460,6 +490,20 @@ Valid filter ops are:
                 if operation["requestBody"].get("required", False):
                     schema["required"].append("body")
                 expects_body = True
+
+        # Add filter parameters for list operations
+        if any(indicator in operation.get('operationId', '').lower() for indicator in ['list', 'get_all', 'fetch']):
+            schema["additionalProperties"] = True  # Allow filter parameters
+            # Add documentation for filters as a property
+            schema["properties"]["_filters"] = {
+                "type": "object",
+                "description": "Optional filters (prefix with _filter_). Examples: _filter_status='error', _filter_name='~ceph.*', _filter_size='>1000', _filter__text='search_term'",
+                "properties": {
+                    "_filter_status": {"type": "string", "description": "Filter by status field"},
+                    "_filter__text": {"type": "string", "description": "Search text in all string fields"},
+                    "_filter__has": {"type": "string", "description": "Filter items that have this field"},
+                }
+            }
 
         return ToolParameters(
             input_schema=schema,
@@ -1015,6 +1059,13 @@ Valid filter ops are:
         url = self._make_request_url(tool, arguments)
         query_params = self._make_query_params(tool, arguments)
 
+        # Extract filters from arguments
+        filters = {}
+        for key, value in arguments.items():
+            if key.startswith("_filter_"):
+                filter_key = key.replace("_filter_", "")
+                filters[filter_key] = value
+
         headers = {
             "Authorization": f"Bearer {self.api_token}",
             "Accept": "application/json",
@@ -1030,19 +1081,28 @@ Valid filter ops are:
         if tool.expects_body:
             kwargs["json"] = body
 
-        return await self._make_api_call(url=url, method=tool.method, kwargs=kwargs)
+        return await self._make_api_call(url=url, method=tool.method, kwargs=kwargs, filters=filters)
 
     async def _make_api_call(
         self,
         url: str,
         method: str,
         kwargs: Dict,
+        filters: Dict = None,
     ) -> dict[str, Any]:
         """
         Helper function to make the actual API call.
         This function is async, make sure to call it with await before returning the result.
         """
+        # Auto-add default limits for list operations to prevent token overflow
+        if TokenOptimizer.should_optimize(url, method):
+            params = kwargs.get('params', {})
+            params = TokenOptimizer.add_default_limit(url, params)
+            kwargs['params'] = params
+
         logger.info(f"Calling {method} {url}")
+        if filters:
+            logger.info(f"With filters: {filters}")
         if logger.isEnabledFor(logging.DEBUG):
             logger.debug(f"kwargs: {json.dumps(kwargs, indent=2)}")
         try:
@@ -1052,6 +1112,14 @@ Valid filter ops are:
                     response_data = json.loads(response_text) if response_text else None
                 except:
                     response_data = response_text
+
+                # Apply filters first (before truncation)
+                if resp.status >= 200 and resp.status < 300 and filters:
+                    response_data = TokenOptimizer.apply_filters(response_data, filters)
+
+                # Then apply token optimization to the response
+                if resp.status >= 200 and resp.status < 300:
+                    response_data = TokenOptimizer.truncate_response(response_data, url)
 
                 # This matches our schema defined in self._build_response_schema
                 schema_response = {
@@ -1083,11 +1151,23 @@ Valid filter ops are:
                 url = url.replace(f"{{{key}}}", str(value))
         return url
 
-    def _make_query_params(self, tool: CroitToolInfo, arguments: Dict) -> str:
+    def _make_query_params(self, tool: CroitToolInfo, arguments: Dict) -> Dict:
         """Construct a query parameter dict from the arguments provided by the LLM."""
         params = {}
+        filters = {}
+
         for key, value in arguments.items():
-            if key == "body" or key not in tool.query_params:
+            if key == "body":
+                continue
+
+            # Extract filters (start with _filter_ prefix)
+            if key.startswith("_filter_"):
+                filter_key = key.replace("_filter_", "")
+                filters[filter_key] = value
+                continue
+
+            # Regular query params
+            if key not in tool.query_params:
                 continue
 
             if isinstance(value, dict):
