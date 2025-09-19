@@ -13,8 +13,10 @@ RUN pip install --no-cache-dir -r requirements.txt
 RUN rm requirements.txt
 
 RUN useradd -m -u 1000 mcp
-USER mcp
 
+# Final production version with working x-llm-hints integration
+RUN echo "Build timestamp: $(date)" > /tmp/build_info
+USER mcp
 COPY mcp-croit-ceph.py /app/
 COPY token_optimizer.py /app/
 COPY croit_log_tools.py /app/

@@ -28,6 +28,9 @@
 
 **Key Features:**
 - Dynamic tool generation from OpenAPI spec
+- Full x-llm-hints integration from OpenAPI metadata
+- Clean, professional tool descriptions without emoji clutter
+- Advanced error handling and MCP protocol compliance
 - Reference resolution for complex schemas
 - Token optimization for reduced LLM costs
 - Multiple organization modes (hybrid, base, categories)

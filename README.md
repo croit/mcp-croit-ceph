@@ -64,6 +64,43 @@ This dramatic reduction improves:
 - **Local OpenAPI Support**: Use a local OpenAPI spec file for testing/development
 - **Schema Resolution**: Handles `$ref` references automatically
 
+### Advanced x-llm-hints Integration
+
+The MCP server fully integrates Croit's x-llm-hints into tool descriptions for optimal LLM guidance:
+
+**What x-llm-hints provide:**
+- **Purpose**: Clear description of what each endpoint does
+- **Usage examples**: Common use cases and workflow guidance
+- **Failure modes**: Expected errors and how to handle them
+- **Rate limits**: API throttling information for efficient usage
+- **Retry strategies**: How to handle transient failures
+- **Poll intervals**: Recommended refresh rates for live data
+- **Cache hints**: Response caching strategies
+- **Related endpoints**: Cross-references for complex workflows
+
+**Examples of integrated hints:**
+```
+manage_cluster tool:
+Purpose: Bootstrap a brand-new Ceph cluster using the selected MON disk and IP address.
+
+Common usage:
+• Invoke immediately after fetching candidates from GET /cluster/create/mons
+• Monitor the returned ManagedTask via /tasks/{id} until bootstrap completes
+
+Failure modes:
+• 400: Validate disk/server eligibility via GET /cluster/create/mons
+• 409: If concurrent bootstrap is in progress, wait for existing task
+
+Rate limits: 60/300s, 30/300s
+Retry strategy: manual_retry, exponential_backoff
+```
+
+**Benefits for LLMs:**
+- **Context-aware operations**: LLMs understand when and how to use each tool
+- **Error handling**: Proactive guidance on handling API errors
+- **Performance optimization**: Built-in rate limiting and caching awareness
+- **Workflow intelligence**: Understanding of multi-step operations
+
 ## Installation
 
 ```bash

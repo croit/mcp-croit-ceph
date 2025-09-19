@@ -63,65 +63,42 @@ except ImportError:
             return data
 
 
-@dataclass
-class QueryParamInfo:
-    is_array: bool
-    required: bool
 
 
-@dataclass
-class CroitToolInfo:
-    path: str
-    method: str
-    expects_body: bool
-    path_params: List[str]
-    query_params: Dict[str, QueryParamInfo]
 
 
-@dataclass
-class ToolParameters:
-    input_schema: Dict
-    expects_body: bool
-    path_params: List[str]
-    query_params: Dict[str, QueryParamInfo]
 
 
 class CroitCephServer:
     def __init__(
         self,
-        mode="hybrid",  # New mode parameter: "hybrid", "base_only", "categories_only", "endpoints_as_tools"
+        mode="hybrid",  # Supported modes: "hybrid", "base_only", "categories_only"
         resolve_references=True,
         offer_whole_spec=False,
-        endpoints_as_tools=False,  # Kept for backwards compatibility
-        max_category_tools=40,  # Maximum number of category tools to generate (40 covers all current categories)
-        min_endpoints_per_category=1,  # Minimum endpoints needed for a category tool (include single-endpoint categories like logs)
+        max_category_tools=10,  # Maximum number of category tools to generate
+        min_endpoints_per_category=1,  # Minimum endpoints needed for a category tool
         openapi_file=None,  # Optional: Use local OpenAPI spec file instead of fetching from server
         enable_log_tools=True,  # Enable advanced log search tools
     ):
-        # tools is a map of tool name (as given to and later provided by the LLM) to the tool info.
-        # Each endpoint is represented in this map as a tool.
-        # Only used if endpoints_as_tools is True, as we don't map endpoints otherwise.
-        self.tools: Dict[str, CroitToolInfo] = {}
-        # mcp_tools later contains the list of tools that will be advertised to the LLM.
-        # The exact list depends on mode.
+        # mcp_tools contains the list of tools that will be advertised to the LLM
         self.mcp_tools: List[types.Tool] = []
-        # api_spec contains the OpenAPI schema as returned from the cluster.
+        # api_spec contains the OpenAPI schema as returned from the cluster
         self.api_spec = None
-        # host is the cluster URL, e.g. http://172.31.134.4:8080.
+        # host is the cluster URL, e.g. http://172.31.134.4:8080
         self.host = None
-        # resolved_references will later be set to true when resolve_references is True.
-        # Meaning if True, the spec won't contain any $ref references anymore.
+        # resolved_references will be set to true when resolve_references is True
         self.resolved_references = False
-        # Category mapping for hybrid mode
+        # Category mapping for hybrid and categories_only modes
         self.category_endpoints = {}
-        # session is later used to make the actual API calls to the cluster.
+        # session is used to make the actual API calls to the cluster
         self.session = aiohttp.ClientSession()
         # Enable log search tools
         self.enable_log_tools = enable_log_tools and LOG_TOOLS_AVAILABLE
 
-        # Handle backwards compatibility
-        if endpoints_as_tools:
-            mode = "endpoints_as_tools"
+        # Validate mode
+        if mode not in ["hybrid", "base_only", "categories_only"]:
+            raise ValueError(f"Unsupported mode: {mode}. Use 'hybrid', 'base_only', or 'categories_only'")
+
         self.mode = mode
         self.max_category_tools = max_category_tools
         self.min_endpoints_per_category = min_endpoints_per_category
@@ -136,14 +113,11 @@ class CroitCephServer:
         if resolve_references:
             self._resolve_swagger_references()
 
+        # Store mode for handler use
+        self.mode = mode
+
         # Configure based on mode
-        if mode == "endpoints_as_tools":
-            self._convert_endpoints_to_tools()
-            tool_handler = self.handle_call_tool
-            self.instructions = (
-                "This MCP server provides access to a croit Ceph cluster."
-            )
-        elif mode == "hybrid":
+        if mode == "hybrid":
             self.offer_whole_spec = offer_whole_spec
             self._analyze_api_structure()
             self._prepare_hybrid_tools()
@@ -151,9 +125,9 @@ class CroitCephServer:
             self.instructions = """This MCP server provides access to a croit Ceph cluster.
 
 Available tools:
-- list_endpoints: List API endpoints with filtering options
-- call_endpoint: Call any API endpoint directly
-- Category-specific tools for common operations (e.g., manage_services, manage_pools)
+- list_endpoints: List API endpoints with filtering options and x-llm-hints
+- call_endpoint: Call any API endpoint directly with optimization features
+- Category-specific tools with integrated x-llm-hints for common operations
 
 Use category tools for common operations, or use list_endpoints/call_endpoint for any endpoint."""
         elif mode == "categories_only":
@@ -162,8 +136,8 @@ Use category tools for common operations, or use list_endpoints/call_endpoint fo
             tool_handler = self.handle_category_tool
             self.instructions = """This MCP server provides access to a croit Ceph cluster.
 
-Category-based tools are available for common operations like managing services, pools, and storage."""
-        else:  # base_only (default fallback)
+Category-based tools with integrated x-llm-hints are available for common operations like managing services, pools, and storage."""
+        else:  # base_only
             self.offer_whole_spec = offer_whole_spec
             self._prepare_api_tools()
             tool_handler = self.handle_api_call_tool
@@ -171,19 +145,33 @@ Category-based tools are available for common operations like managing services,
 Use list_api_endpoints to get an overview of what endpoints are available.
 Use get_reference_schema to get more info on the schema for endpoints.
 Use call_api_endpoint to then call one of the endpoints.
-Many endpoints offer pagination. When available, use it to refine the query.
-                    """
+Many endpoints offer pagination. When available, use it to refine the query."""
 
         # Add log search tools if enabled (works in all modes)
         if self.enable_log_tools:
             self._add_log_search_tools()
 
         self.server = Server("mcp-croit-ceph")
-        # These functions create decorators to register the handlers.
-        # We then call the decorator with our functions.
-        # We can't use the decorators directly because of self.
-        self.server.list_tools()(self.handle_list_tools)
-        self.server.call_tool()(tool_handler)
+
+        # Register handlers with proper signatures
+        @self.server.list_tools()
+        async def list_tools_handler() -> list[types.Tool]:
+            return await self.handle_list_tools()
+
+        @self.server.call_tool()
+        async def call_tool_handler(name: str, arguments: dict) -> list[types.TextContent]:
+            try:
+                # Call the appropriate handler based on stored mode
+                if self.mode == "hybrid":
+                    result = await self.handle_hybrid_tool(name, arguments)
+                elif self.mode == "categories_only":
+                    result = await self.handle_category_tool(name, arguments)
+                else:  # base_only
+                    result = await self.handle_api_call_tool(name, arguments)
+
+                return [types.TextContent(type="text", text=str(result))]
+            except Exception as e:
+                raise RuntimeError(str(e))
 
     def _load_config(self):
         """Load croit API configuration from environment or file, i.e. the target host and the API token."""
@@ -344,226 +332,7 @@ Valid filter ops are:
         )
         self.resolved_references = True
 
-    def _convert_endpoints_to_tools(self):
-        """
-        Turn each endpoint in self.api_spec into a MCP tool.
-        Will populate self.tools with a map of tool name to the tool information for each endpoint,
-        and self.mcp_tools with a list of all tools.
-        Meaning both will contain as many elements as there are API endpoints (plus some extra non-API tools).
-        """
 
-        self.tools = {}
-        paths = self.api_spec.get("paths", {})
-        for path, methods in paths.items():
-            for method, operation in methods.items():
-                if method.lower() not in ["get", "post", "put", "delete", "patch"]:
-                    continue
-
-                if operation.get("deprecated", False):
-                    continue
-
-                operation_id = operation.get("operationId")
-                if operation_id:
-                    tool_name = operation_id.replace("-", "_").replace(" ", "_").lower()
-                else:
-                    logger.error(
-                        f"API endpoint {path} does not have an operation ID defined"
-                    )
-                    continue
-
-                description = operation.get("summary", "")
-                if operation.get("description"):
-                    description = (
-                        f"{description} - {operation['description']}"
-                        if description
-                        else operation["description"]
-                    )
-                if not description:
-                    description = f"{method.upper()} {path}"
-
-                # Add examples from x-llm-hints if available
-                llm_hints = operation.get("x-llm-hints", {})
-                if "request_examples" in llm_hints:
-                    examples = llm_hints["request_examples"]
-                    if examples:
-                        description += "\n\nExample request:"
-                        # Take first example for brevity
-                        example = examples[0] if isinstance(examples, list) else examples
-                        if isinstance(example, dict) and "example" in example:
-                            import json
-                            description += f"\n```json\n{json.dumps(example['example'], indent=2)}\n```"
-                        elif isinstance(example, str):
-                            description += f"\n```json\n{example}\n```"
-
-                # Add parameter details if available
-                if "parameter_details" in llm_hints:
-                    description += "\n\nParameter details:"
-                    for param, detail in llm_hints["parameter_details"].items():
-                        description += f"\n- {param}: {detail}"
-
-                # Add token optimization hints for large data endpoints
-                if any(pattern in path.lower() for pattern in ['/list', '/all', '/export', '/stats', '/logs']):
-                    description += "\n\n💡 Token Optimization & Filters:"
-                    description += "\n• Use limit=10 for initial exploration"
-                    description += "\n• Filter by field: _filter_status='error'"
-                    description += "\n• Regex search: _filter_name='~ceph.*'"
-                    description += "\n• Numeric: _filter_size='>1000'"
-                    description += "\n• Text search: _filter__text='error'"
-                    description += "\n• Has field: _filter__has='error_message'"
-                    description += "\n• Large responses auto-truncated to 50 items"
-
-                description = description[:1200]  # Increased limit for examples and hints
-
-                parameters = self._build_parameters_schema(operation)
-                # Specifying the output schema means it must be correct.
-                # This can fail tool calls for no reason, so I disabled the output schema for now.
-                # response_schema = self._build_response_schema(operation)
-
-                tool = types.Tool(
-                    name=tool_name,
-                    description=description,
-                    inputSchema=parameters.input_schema,
-                    # outputSchema=response_schema,
-                )
-                self.mcp_tools.append(tool)
-                self.tools[tool_name] = CroitToolInfo(
-                    path=path,
-                    method=method,
-                    expects_body=parameters.expects_body,
-                    path_params=parameters.path_params,
-                    query_params=parameters.query_params,
-                )
-                logger.debug(f"Adding tool {tool_name}")
-
-        logger.info(
-            f"Successfully loaded API spec with {len(self.mcp_tools)} endpoints"
-        )
-
-        self.resolve_references_tool = "get_reference_schema"
-        if self.resolve_references_tool in self.tools:
-            raise RuntimeError(
-                f"Tool {self.resolve_references_tool} is also defined as an API endpoint, this is unexpected"
-            )
-        # We only offer the tool if references haven't been resolved.
-        if not self.resolved_references:
-            self.mcp_tools.insert(
-                0,
-                types.Tool(
-                    name=self.resolve_references_tool,
-                    description="Resolves $ref schemas. This tool should be called whenever $ref is encountered to get the actual schema.",
-                    inputSchema={
-                        "type": "object",
-                        "properties": {
-                            "reference_path": {
-                                "type": "string",
-                                "description": 'The reference string, e.g. "#/components/schemas/PaginationRequest"',
-                            }
-                        },
-                        "required": ["reference_path"],
-                    },
-                    outputSchema={
-                        "type": "object",
-                        "description": "The resolved reference schema.",
-                    },
-                ),
-            )
-
-    def _build_parameters_schema(self, operation: Dict) -> ToolParameters:
-        """
-        Given the OpenAPI spec of a single endpoint (including HTTP method), this will generate the ToolParameters.
-        The ToolParameters describe the input schema for the tool, i.e. what request body and what path and query parameters are expected.
-        """
-        schema = {"type": "object", "properties": {}, "required": [], "additionalProperties": False}
-        path_params: List[str] = []
-        query_params: Dict[str, QueryParamInfo] = {}
-
-        # Path and query parameters, see https://spec.openapis.org/oas/v3.1.0.html#parameter-object
-        for param in operation.get("parameters", []):
-            param_name = param["name"]
-            param_location = param["in"]
-
-            if param_location in ["path", "query"]:
-                param_schema = self._convert_openapi_schema_to_json_schema(param)
-                schema["properties"][param_name] = param_schema
-                required = param.get("required", False)
-                if required or param_location == "path":
-                    schema["required"].append(param_name)
-                if param_location == "query":
-                    is_array = param_schema.get("type", "") == "array"
-                    query_params[param_name] = QueryParamInfo(
-                        required=required,
-                        is_array=is_array,
-                    )
-                else:
-                    path_params.append(param_name)
-
-        # Request body, see https://spec.openapis.org/oas/v3.1.0.html#request-body-object
-        expects_body = False
-        if "requestBody" in operation:
-            content = operation["requestBody"].get("content", {})
-            if "application/json" in content:
-                body_schema = self._convert_openapi_schema_to_json_schema(
-                    content["application/json"]
-                )
-                schema["properties"]["body"] = body_schema
-                if operation["requestBody"].get("required", False):
-                    schema["required"].append("body")
-                expects_body = True
-
-        # Add filter parameters for list operations
-        if any(indicator in operation.get('operationId', '').lower() for indicator in ['list', 'get_all', 'fetch']):
-            schema["additionalProperties"] = True  # Allow filter parameters
-            # Add documentation for filters as a property
-            schema["properties"]["_filters"] = {
-                "type": "object",
-                "description": "Optional filters (prefix with _filter_). Examples: _filter_status='error', _filter_name='~ceph.*', _filter_size='>1000', _filter__text='search_term'",
-                "properties": {
-                    "_filter_status": {"type": "string", "description": "Filter by status field"},
-                    "_filter__text": {"type": "string", "description": "Search text in all string fields"},
-                    "_filter__has": {"type": "string", "description": "Filter items that have this field"},
-                }
-            }
-
-        return ToolParameters(
-            input_schema=schema,
-            expects_body=expects_body,
-            path_params=path_params,
-            query_params=query_params,
-        )
-
-    def _build_response_schema(self, operation: Dict) -> Optional[Dict]:
-        """
-        Same as _build_parameters_schema, but for the response.
-        We additionally wrap the response in our own object, that also includes the HTTP return code and error information.
-        """
-
-        schema = {
-            "type": "object",
-            "description": "Response from croit, with either an error string if failed or a result if successful",
-            "properties": {
-                "code": {
-                    "type": "integer",
-                    "format": "int32",
-                    "description": "HTTP return code from croit",
-                },
-                "error": {
-                    "type": "string",
-                    "description": "Error message from croit (only if return code is an error code)",
-                },
-            },
-            "required": ["code"],
-        }
-
-        # Response body, see https://spec.openapis.org/oas/v3.1.0.html#response-object
-        content = operation.get("responses", {}).get("default", {}).get("content", {})
-        if "application/json" not in content:
-            return None
-
-        body_schema = self._convert_openapi_schema_to_json_schema(
-            content["application/json"]
-        )
-        schema["properties"]["result"] = body_schema
-        return schema
 
     def _convert_openapi_schema_to_json_schema(self, openapi_schema: Dict) -> Dict:
         """
@@ -784,10 +553,23 @@ Valid filter ops are:
         self.call_endpoint_tool = "call_endpoint"
         self.get_schema_tool = "get_schema"
 
-        # Base tool: list_endpoints with filtering
+        # Base tool: list_endpoints with filtering and hints
+        list_endpoints_desc = """List available API endpoints with filtering options.
+
+Token Optimization Tips:
+• Returns endpoint metadata including x-llm-hints
+• Filter by category to reduce response size
+• Search for specific endpoints by name or path
+• Each endpoint includes purpose, usage examples, and parameter details from OpenAPI spec
+
+Example usage:
+• category="services" - List all service management endpoints
+• method="post" - List all creation endpoints
+• search="pool" - Find all pool-related endpoints"""
+
         self.mcp_tools.append(types.Tool(
             name=self.list_endpoints_tool,
-            description="List available API endpoints with filtering options",
+            description=list_endpoints_desc,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -808,10 +590,28 @@ Valid filter ops are:
             }
         ))
 
-        # Base tool: call_endpoint
+        # Base tool: call_endpoint with enhanced description
+        call_endpoint_desc = """Call any API endpoint directly.
+
+Token Optimization & Filters:
+• Use limit parameter for pagination (e.g., query_params={"limit": 10})
+• Add _filter_* parameters to filter results:
+  - _filter_status="error" - Filter by status
+  - _filter_name="~pattern.*" - Regex filter
+  - _filter_size=">1000" - Numeric comparison
+  - _filter__text="search" - Full-text search
+  - _filter__has="field" - Has field check
+• Large responses are automatically truncated to save tokens
+
+The endpoint metadata from list_endpoints includes x-llm-hints with:
+• Purpose descriptions
+• Usage examples
+• Parameter details
+• Request/response examples"""
+
         self.mcp_tools.append(types.Tool(
             name=self.call_endpoint_tool,
-            description="Call any API endpoint directly",
+            description=call_endpoint_desc,
             inputSchema={
                 "type": "object",
                 "properties": {
@@ -896,39 +696,159 @@ Valid filter ops are:
         tool_name = f"manage_{category.replace('-', '_')}"
         description = f"Manage {category} resources. Available actions: {', '.join(actions)}"
 
-        # Extract key LLM hints for tool description
-        # Prioritize purpose and usage as they're most helpful for tool discovery
+        # Extract ALL LLM hints for comprehensive tool description
         hint_purposes = []
         hint_usages = []
+        hint_examples = []
+        hint_params = []
+        hint_failure_modes = []
+        hint_error_handling = []
+        hint_workflow_guidance = {}
+        hint_rate_limits = []
+        hint_retry_strategies = []
+        hint_poll_intervals = []
+        hint_cache_hints = []
+        hint_related_endpoints = []
         has_confirmations = False
+        has_token_hints = False
 
-        for ep in endpoints[:5]:  # Sample first 5 endpoints for hints
+        for ep in endpoints:  # Check ALL endpoints for hints
             hints = ep.get("llm_hints", {})
             if hints:
-                # Collect purposes and usages for the description
-                if hints.get("purpose") and len(hint_purposes) < 2:
-                    hint_purposes.append(hints["purpose"][:100])
-                if hints.get("usage") and len(hint_usages) < 3:
-                    for usage in hints["usage"][:2]:
-                        if len(hint_usages) < 3:
-                            hint_usages.append(usage[:80])
+                # Collect purposes
+                if hints.get("purpose") and len(hint_purposes) < 3:
+                    hint_purposes.append(hints["purpose"])
+
+                # Collect usage examples
+                if hints.get("usage"):
+                    for usage in hints["usage"]:
+                        if len(hint_usages) < 5:
+                            hint_usages.append(usage)
+
+                # Collect request examples
+                if hints.get("request_examples") and len(hint_examples) < 2:
+                    hint_examples.append(hints["request_examples"])
+
+                # Collect parameter details
+                if hints.get("parameter_details"):
+                    hint_params.extend(list(hints["parameter_details"].keys()))
+
+                # Collect failure modes
+                if hints.get("failure_modes"):
+                    hint_failure_modes.extend(hints["failure_modes"][:3])
+
+                # Collect error handling
+                if hints.get("error_handling"):
+                    hint_error_handling.extend(hints["error_handling"][:2])
+
+                # Collect workflow guidance
+                if hints.get("workflow_guidance"):
+                    hint_workflow_guidance.update(hints["workflow_guidance"])
+
+                # Collect rate limits
+                if hints.get("rate_limit"):
+                    limit_info = hints["rate_limit"]
+                    if isinstance(limit_info, dict):
+                        hint_rate_limits.append(f"{limit_info.get('limit', 'N/A')}/{limit_info.get('window_seconds', 60)}s")
+
+                # Collect retry strategy
+                if hints.get("retry_strategy"):
+                    hint_retry_strategies.append(hints["retry_strategy"])
+
+                # Collect poll intervals
+                if hints.get("recommended_poll_interval"):
+                    poll_info = hints["recommended_poll_interval"]
+                    if isinstance(poll_info, dict):
+                        hint_poll_intervals.append(f"{poll_info.get('value', 'N/A')} {poll_info.get('unit', 'seconds')}")
+
+                # Collect cache hints
+                if hints.get("cache_hint"):
+                    hint_cache_hints.append(hints["cache_hint"])
+
+                # Collect related endpoints
+                if hints.get("related_endpoints"):
+                    hint_related_endpoints.extend(hints["related_endpoints"][:3])
+
                 if hints.get("requires_confirmation"):
                     has_confirmations = True
 
-        # Build enhanced description with hints
-        if hint_purposes:
-            description += f". Purpose: {hint_purposes[0]}"
-        if hint_usages:
-            description += f". Common usage: {hint_usages[0]}"
-        if has_confirmations:
-            description += ". Note: Some operations require confirmation"
+                if hints.get("response_shape") or hints.get("token_optimization"):
+                    has_token_hints = True
 
-        # Add examples from endpoint summaries
+        # Build enhanced description with ALL hints (clean, professional format)
+        if hint_purposes:
+            description += f"\n\nPurpose: {hint_purposes[0][:200]}"
+
+        if hint_usages:
+            description += f"\n\nCommon usage:\n• " + "\n• ".join(hint_usages[:3])
+
+        # Add workflow guidance if available
+        if hint_workflow_guidance:
+            if hint_workflow_guidance.get("pre_check"):
+                description += f"\n\nPre-check: {hint_workflow_guidance['pre_check'][:150]}"
+            if hint_workflow_guidance.get("post_action"):
+                description += f"\n\nPost-action: {hint_workflow_guidance['post_action'][:150]}"
+
+        # Add failure modes
+        if hint_failure_modes:
+            unique_failures = list(set(hint_failure_modes))[:2]
+            description += f"\n\nFailure modes:\n• " + "\n• ".join(unique_failures)
+
+        # Add error handling
+        if hint_error_handling:
+            error_info = []
+            for error in hint_error_handling[:2]:
+                if isinstance(error, dict):
+                    code = error.get("code", "N/A")
+                    action = error.get("action", "No action specified")[:100]
+                    error_info.append(f"{code}: {action}")
+            if error_info:
+                description += f"\n\nError handling:\n• " + "\n• ".join(error_info)
+
+        # Add rate limits
+        if hint_rate_limits:
+            unique_limits = list(set(hint_rate_limits))[:2]
+            description += f"\n\nRate limits: {', '.join(unique_limits)}"
+
+        # Add retry strategy
+        if hint_retry_strategies:
+            unique_strategies = list(set(hint_retry_strategies))
+            description += f"\n\nRetry strategy: {', '.join(unique_strategies)}"
+
+        # Add recommended polling intervals
+        if hint_poll_intervals:
+            unique_intervals = list(set(hint_poll_intervals))
+            description += f"\n\nPoll interval: {', '.join(unique_intervals)}"
+
+        # Add cache hints
+        if hint_cache_hints:
+            unique_cache = list(set(hint_cache_hints))
+            description += f"\n\nCache: {', '.join(unique_cache)}"
+
+        # Add related endpoints
+        if hint_related_endpoints:
+            unique_related = list(set(hint_related_endpoints))[:3]
+            description += f"\n\nRelated endpoints: {', '.join(unique_related)}"
+
+        if hint_params:
+            unique_params = list(set(hint_params))[:5]
+            description += f"\n\nKey parameters: {', '.join(unique_params)}"
+
+        if hint_examples:
+            description += "\n\nRequest examples available via list_endpoints"
+
+        if has_token_hints:
+            description += "\n\nToken optimization: Use filters and pagination"
+
+        if has_confirmations:
+            description += "\n\nNote: Some operations require confirmation"
+
+        # Add endpoint examples
         example_ops = endpoints[:3]
         if example_ops:
-            examples = [f"{ep['method'].upper()} {ep['path']}: {ep['summary']}" for ep in example_ops if ep['summary']]
+            examples = [f"{ep['method'].upper()} {ep['path']}" for ep in example_ops]
             if examples:
-                description += f". Examples: {'; '.join(examples[:2])}"
+                description += f"\n\nEndpoints: {'; '.join(examples)}"
 
         input_schema = {
             "type": "object",
@@ -956,7 +876,7 @@ Valid filter ops are:
 
         self.mcp_tools.append(types.Tool(
             name=tool_name,
-            description=description[:500],  # Limit description length
+            description=description[:1500],  # Increased limit to include x-llm-hints
             inputSchema=input_schema
         ))
 
@@ -1064,64 +984,11 @@ Valid filter ops are:
             self.mcp_tools.append(tool)
             logger.info(f"Added log search tool: {tool_def['name']}")
 
-    async def handle_list_tools(self) -> List[types.Tool]:
+    async def handle_list_tools(self) -> list[types.Tool]:
         """Return available tools."""
         logger.info(f"Providing {len(self.mcp_tools)} tools")
         return self.mcp_tools
 
-    async def handle_call_tool(
-        self,
-        name: str,
-        arguments: Dict,
-    ) -> dict[str, Any]:
-        """
-        Execute API call based on tool name and arguments.
-        Each tool is mapped to a specific API endpoint.
-        """
-        logger.info(f"Tool call {name} with args {arguments}")
-
-        # Handle log search tools
-        if self.enable_log_tools:
-            if name == "croit_log_search":
-                return await self._handle_log_search(arguments)
-            elif name == "croit_log_check":
-                return await self._handle_log_check(arguments)
-        if name == self.resolve_references_tool:
-            resolved = self._resolve_reference_schema(
-                ref_path=arguments["reference_path"]
-            )
-            return resolved
-
-        if name not in self.tools:
-            raise RuntimeError(f"Tool {name} not found")
-        tool = self.tools[name]
-
-        url = self._make_request_url(tool, arguments)
-        query_params = self._make_query_params(tool, arguments)
-
-        # Extract filters from arguments
-        filters = {}
-        for key, value in arguments.items():
-            if key.startswith("_filter_"):
-                filter_key = key.replace("_filter_", "")
-                filters[filter_key] = value
-
-        headers = {
-            "Authorization": f"Bearer {self.api_token}",
-            "Accept": "application/json",
-        }
-        body = None
-        if tool.expects_body:
-            headers["Content-Type"] = "application/json"
-            body = arguments["body"]
-
-        kwargs = {"headers": headers, "ssl": self.ssl}
-        if query_params:
-            kwargs["params"] = query_params
-        if tool.expects_body:
-            kwargs["json"] = body
-
-        return await self._make_api_call(url=url, method=tool.method, kwargs=kwargs, filters=filters)
 
     async def _make_api_call(
         self,
@@ -1182,47 +1049,6 @@ Valid filter ops are:
             schema_response = {"code": 500, "error": f"Request failed: {str(e)}"}
             return schema_response
 
-    def _make_request_url(self, tool: CroitToolInfo, arguments: Dict) -> str:
-        """Construct the URL from the arguments (i.e. path parameters) provided by the LLM."""
-        url = f"{self.host}/api{tool.path}"
-
-        for key, value in arguments.items():
-            if key != "body" and key in tool.path_params:
-                url = url.replace(f"{{{key}}}", str(value))
-        return url
-
-    def _make_query_params(self, tool: CroitToolInfo, arguments: Dict) -> Dict:
-        """Construct a query parameter dict from the arguments provided by the LLM."""
-        params = {}
-        filters = {}
-
-        for key, value in arguments.items():
-            if key == "body":
-                continue
-
-            # Extract filters (start with _filter_ prefix)
-            if key.startswith("_filter_"):
-                filter_key = key.replace("_filter_", "")
-                filters[filter_key] = value
-                continue
-
-            # Regular query params
-            if key not in tool.query_params:
-                continue
-
-            if isinstance(value, dict):
-                value = json.dumps(value)
-
-            param_def = tool.query_params[key]
-            if param_def.is_array:
-                # Convert array to repeated query params
-                if isinstance(value, list):
-                    params[key] = value
-                else:
-                    params[key] = [value]
-            else:
-                params[key] = value
-        return params
 
     async def handle_api_call_tool(
         self,
@@ -1570,25 +1396,20 @@ async def main():
     parser = argparse.ArgumentParser()
     parser.add_argument(
         "--mode",
-        choices=["hybrid", "base_only", "categories_only", "endpoints_as_tools"],
+        choices=["hybrid", "base_only", "categories_only"],
         default="hybrid",
         help="Tool generation mode (default: hybrid)",
-    )
-    parser.add_argument(
-        "--endpoints-as-tools",
-        action="store_true",
-        help="Legacy: Map each API endpoint to a separate MCP tool (same as --mode endpoints_as_tools)",
     )
     parser.add_argument(
         "--no-resolve-references",
         action="store_false",
         dest="resolve_references",
-        help="Don't resolve $refs in the API spec. Depending on the MCP client, resolving references may be required.",
+        help="Don't resolve $refs in the API spec.",
     )
     parser.add_argument(
         "--offer-whole-spec",
         action="store_true",
-        help="Offer the entire API spec in the list_api_endpoints tool. Ignored when using --endpoints-as-tools.",
+        help="Offer the entire API spec in the list_api_endpoints tool.",
     )
     parser.add_argument(
         "--no-permission-check",
@@ -1605,18 +1426,13 @@ async def main():
     parser.add_argument(
         "--openapi-file",
         type=str,
+        default=os.environ.get("OPENAPI_FILE"),
         help="Use local OpenAPI spec file instead of fetching from server",
     )
     args = parser.parse_args()
 
-    # Handle legacy --endpoints-as-tools flag
-    if args.endpoints_as_tools:
-        mode = "endpoints_as_tools"
-    else:
-        mode = args.mode
-
     server = CroitCephServer(
-        mode=mode,
+        mode=args.mode,
         resolve_references=args.resolve_references,
         offer_whole_spec=args.offer_whole_spec,
         max_category_tools=args.max_category_tools,
