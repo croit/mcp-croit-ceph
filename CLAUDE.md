@@ -20,10 +20,19 @@ Organized by functional areas like:
 - `croit_services_*`: Service management
 - `croit_cluster_*`: Cluster operations
 
-### 3. VictoriaLogs Integration
+### 3. Enhanced VictoriaLogs Integration
 
-#### `croit_log_search`
-**Revolutionary direct VictoriaLogs JSON interface** - No translation layer!
+#### `croit_log_search` - Advanced Log Analysis
+**Revolutionary direct VictoriaLogs JSON interface** with intelligent enhancements:
+
+🚀 **NEW FEATURES:**
+- **Smart Summaries**: Priority breakdown, service analysis, critical event extraction
+- **Intelligent Truncation**: Critical events prioritized over chronological order
+- **Log Level Shortcuts**: `search_errors()`, `search_warnings()`, `search_info()`, `search_critical()`
+- **Server Auto-Discovery**: Automatic detection of available server IDs
+- **Transport Analysis**: Debug kernel log availability with multiple strategies
+- **Template Queries**: 10 pre-built debugging scenarios
+- **Response Optimization**: Configurable size limits with critical event preservation
 
 **Direct VictoriaLogs Syntax:**
 ```json
@@ -58,6 +67,122 @@ Instant log condition checking (non-blocking).
   "conditions": ["OSD failures", "Slow requests over 5s"],
   "duration": 60,
   "threshold": 5
+}
+```
+
+### 4. NEW: Advanced Debug Features
+
+#### Log Level Shortcuts 🎯
+Quick access to specific priority levels:
+
+```python
+# Critical/Emergency logs (priority ≤2)
+await client.search_critical("OSD failures", hours_back=48, limit=50)
+
+# Error logs (priority ≤3)
+await client.search_errors("authentication", hours_back=24, limit=100)
+
+# Warning logs (priority ≤4)
+await client.search_warnings("slow requests", hours_back=24, limit=200)
+
+# Info logs (priority ≤6)
+await client.search_info("startup sequence", hours_back=6, limit=500)
+```
+
+#### Server Auto-Discovery 🖥️
+Automatic detection of available server IDs:
+
+```python
+# Discover servers from recent logs
+server_info = await client.discover_servers()
+# Returns: server IDs, hostnames, activity levels, service distribution
+
+# Get human-readable summary
+summary = await client.get_server_summary()
+# "🖥️ Detected 3 active server(s):
+#  🟢 Server 1 (new-croit-host-C0DE01): 1,247 logs (45.2%), 8 services
+#  🟢 Server 2 (ceph-node-02): 982 logs (35.6%), 6 services"
+```
+
+#### Kernel Log Debugging 🔍
+Multiple strategies to find kernel logs:
+
+```python
+# Analyze all available transport types
+transports = await client.analyze_log_transports(hours_back=24)
+# Shows: kernel, syslog, journal distributions with sample messages
+
+# Debug kernel log availability
+kernel_debug = await client.find_kernel_logs_debug(hours_back=24)
+# Tests: direct kernel transport, syslog+kernel identifier, message content, hardware keywords
+```
+
+#### Template Queries 🛠️
+Pre-built debugging scenarios:
+
+```python
+templates = CephDebugTemplates.get_templates()
+# Available templates:
+# - osd_health_check: OSD failures, flapping, performance issues
+# - cluster_status_errors: Critical cluster-wide errors
+# - slow_requests: Slow operations and blocked requests
+# - pg_issues: Placement Group problems
+# - network_errors: Connectivity timeouts, heartbeat issues
+# - mon_election: Monitor election problems
+# - storage_errors: Disk errors, SMART failures
+# - kernel_ceph_errors: Kernel-level Ceph messages
+# - rbd_mapping_issues: RBD client problems
+# - recent_startup: Service startup sequences
+
+# Use template
+template = CephDebugTemplates.get_template_by_scenario('osd_health_check')
+# Returns complete query with optimal time range and limits
+```
+
+#### Response Size Optimization 📊
+Intelligent size control:
+
+```python
+# Optimized search (automatic)
+result = await client.search_optimized("OSD errors", limit=1000, optimize_response=True)
+# Applies: 50 log max, 150 char messages, critical events first
+
+# Manual optimization
+optimized = client.optimize_response_size(
+    data=search_result,
+    max_log_entries=30,
+    max_message_length=100
+)
+```
+
+#### Smart Summaries 📈
+Comprehensive log analysis:
+
+```python
+# Included in all search results:
+{
+  "summary": {
+    "summary": "📊 Log Analysis Summary - 1,247 total entries\n🚨 5 critical events\n❌ 23 errors\n⚠️ 89 warnings",
+    "priority_breakdown": {"ERROR": 23, "WARNING": 89, "INFO": 1135},
+    "service_breakdown": {"ceph-osd@12": 456, "ceph-mon": 234},
+    "critical_events": [
+      {
+        "priority": "ERROR",
+        "timestamp": "2023-...",
+        "service": "ceph-osd@12",
+        "message_preview": "OSD failed to start: cannot access block device...",
+        "score": -15  # Lower = more critical
+      }
+    ],
+    "trends": {
+      "peak_hours": [["2023-12-20 14:00", 234]],
+      "busiest_service": "ceph-osd@12"
+    },
+    "recommendations": [
+      "🚨 Immediate attention needed: 5 critical events",
+      "💾 Multiple OSD issues detected - check storage health"
+    ]
+  }
 }
 ```
 
