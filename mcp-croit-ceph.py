@@ -79,6 +79,8 @@ class CroitCephServer:
         min_endpoints_per_category=1,  # Minimum endpoints needed for a category tool
         openapi_file=None,  # Optional: Use local OpenAPI spec file instead of fetching from server
         enable_log_tools=True,  # Enable advanced log search tools
+        enable_daos=False,  # Enable DAOS-specific tools and endpoints
+        enable_specialty_features=True,  # Enable specialty features (rbd-mirror, etc.)
     ):
         # mcp_tools contains the list of tools that will be advertised to the LLM
         self.mcp_tools: List[types.Tool] = []
@@ -94,6 +96,9 @@ class CroitCephServer:
         self.session = aiohttp.ClientSession()
         # Enable log search tools
         self.enable_log_tools = enable_log_tools and LOG_TOOLS_AVAILABLE
+        # Feature flags
+        self.enable_daos = enable_daos
+        self.enable_specialty_features = enable_specialty_features
 
         # Validate mode
         if mode not in ["hybrid", "base_only", "categories_only"]:
@@ -451,9 +456,20 @@ Valid filter ops are:
                     }
                     self.category_endpoints[tag].append(endpoint_info)
 
+        # Filter categories based on feature flags
+        filtered_tag_counter = {}
+        for tag, count in tag_counter.items():
+            # Skip DAOS if not enabled
+            if tag == "daos" and not self.enable_daos:
+                continue
+            # Skip specialty features if not enabled
+            if not self.enable_specialty_features and tag in ["rbd-mirror", "qos-settings", "ceph-keys"]:
+                continue
+            filtered_tag_counter[tag] = count
+
         # Sort categories by operation count and select top categories
         potential_categories = [
-            cat for cat, count in tag_counter.most_common(self.max_category_tools * 2)  # Get more initially
+            cat for cat, count in Counter(filtered_tag_counter).most_common(self.max_category_tools * 2)  # Get more initially
             if count >= self.min_endpoints_per_category
         ]
 
@@ -554,18 +570,26 @@ Valid filter ops are:
         self.get_schema_tool = "get_schema"
 
         # Base tool: list_endpoints with filtering and hints
-        list_endpoints_desc = """List available API endpoints with filtering options.
+        list_endpoints_desc = """List available API endpoints with smart filtering and prioritization.
 
-Token Optimization Tips:
+Token Optimization & Smart Search:
 • Returns endpoint metadata including x-llm-hints
+• Automatically prioritizes most relevant endpoints (e.g., Ceph pools over DAOS pools)
 • Filter by category to reduce response size
-• Search for specific endpoints by name or path
-• Each endpoint includes purpose, usage examples, and parameter details from OpenAPI spec
+• Smart truncation shows priority results first
+
+Intent-based filtering:
+• intent="read" - Only GET operations (status, list, details)
+• intent="write" - Only POST/PUT/PATCH operations (create, update)
+• intent="manage" - Only DELETE operations (remove, destroy)
+• intent="all" - All operations (default)
 
 Example usage:
-• category="services" - List all service management endpoints
-• method="post" - List all creation endpoints
-• search="pool" - Find all pool-related endpoints"""
+• search="pool", intent="read" - Only pool status/list endpoints
+• category="ceph-pools", intent="write" - Only pool creation/modification
+• search="rbd", intent="manage" - Only RBD deletion endpoints
+
+Priority categories: ceph-pools, rbds, osds, servers, services, cluster"""
 
         self.mcp_tools.append(types.Tool(
             name=self.list_endpoints_tool,
@@ -585,6 +609,11 @@ Example usage:
                     "search": {
                         "type": "string",
                         "description": "Search term to filter endpoints by path or summary"
+                    },
+                    "intent": {
+                        "type": "string",
+                        "enum": ["read", "write", "manage", "all"],
+                        "description": "Intent-based filtering: read (GET), write (POST/PUT/PATCH), manage (DELETE), all (default)"
                     }
                 }
             }
@@ -658,6 +687,35 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
                 }
             ))
 
+        # Add quick-access tool for common searches
+        self.mcp_tools.append(types.Tool(
+            name="quick_find",
+            description="""Quick access to most common endpoint categories.
+
+Instantly get the most relevant endpoints without searching through hundreds of results:
+• Use this when you know what type of resource you want to work with
+• Returns only the most relevant endpoints for each category
+• Much faster than searching through all 500+ endpoints
+
+Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs""",
+            inputSchema={
+                "type": "object",
+                "properties": {
+                    "resource_type": {
+                        "type": "string",
+                        "enum": ["ceph-pools", "rbds", "rbd-mirror", "osds", "servers", "services", "cluster", "logs", "stats"],
+                        "description": "Type of resource to find endpoints for"
+                    },
+                    "action_type": {
+                        "type": "string",
+                        "enum": ["list", "create", "status", "manage", "all"],
+                        "description": "Type of action you want to perform (optional)"
+                    }
+                },
+                "required": ["resource_type"]
+            }
+        ))
+
         # Generate category tools for top categories
         for category in self.top_categories:
             self._generate_category_tool(category)
@@ -675,7 +733,14 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
         # Analyze available operations
         methods = set(ep["method"] for ep in endpoints)
         has_list = any(ep["method"] == "get" and "{" not in ep["path"] for ep in endpoints)
-        has_get = any(ep["method"] == "get" and "{" in ep["path"] for ep in endpoints)
+        # Only consider "get" action if there's a simple resource endpoint like /resource/{id}
+        # Exclude complex paths like /resource/status/{timestamp} or /resource/action/{param}
+        has_get = any(
+            ep["method"] == "get" and "{" in ep["path"] and
+            ep["path"].count("{") == 1 and  # Only one parameter
+            not any(word in ep["path"].lower() for word in ["status", "history", "action", "config"])  # Exclude status/action endpoints
+            for ep in endpoints
+        )
         has_create = "post" in methods
         has_update = "put" in methods or "patch" in methods
         has_delete = "delete" in methods
@@ -975,10 +1040,31 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
         if not LOG_TOOLS_AVAILABLE:
             return
 
+        # Get current time info for LLM context
+        import time
+        from datetime import datetime
+
+        current_unix = int(time.time())
+        current_human = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+        one_hour_ago = current_unix - 3600
+        one_day_ago = current_unix - 86400
+
+        time_context = f"""
+
+CURRENT TIME CONTEXT (for timestamp calculations):
+• Current Unix timestamp: {current_unix}
+• Current time (human): {current_human}
+• 1 hour ago: {one_hour_ago}
+• 1 day ago: {one_day_ago}
+• Use these values when constructing start_timestamp/end_timestamp queries"""
+
         for tool_def in LOG_SEARCH_TOOLS:
+            # Add current time context to description
+            enhanced_description = tool_def["description"] + time_context
+
             tool = types.Tool(
                 name=tool_def["name"],
-                description=tool_def["description"],
+                description=enhanced_description,
                 inputSchema=tool_def["inputSchema"]
             )
             self.mcp_tools.append(tool)
@@ -1150,6 +1236,9 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
         if name == self.list_endpoints_tool:
             return self._list_endpoints_filtered(arguments)
 
+        if name == "quick_find":
+            return self._quick_find_endpoints(arguments)
+
         if name == self.call_endpoint_tool:
             return await self._call_endpoint_direct(arguments)
 
@@ -1186,31 +1275,47 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
 
     async def _handle_log_search(self, arguments: Dict) -> dict[str, Any]:
         """Handle log search tool call"""
-        # Extract host and port from self.host
+        # Extract host, port, and protocol from self.host
         import re
-        match = re.match(r'https?://([^:]+):?(\d+)?', self.host)
+        match = re.match(r'(https?)://([^:]+):?(\d+)?', self.host)
         if match:
-            host = match.group(1)
-            port = int(match.group(2)) if match.group(2) else 8080
+            protocol = match.group(1)
+            host = match.group(2)
+            port = int(match.group(3)) if match.group(3) else (443 if protocol == 'https' else 8080)
+            use_ssl = protocol == 'https'
         else:
             host = self.host
             port = 8080
+            use_ssl = False
 
-        return await handle_log_search(arguments, host, port)
+        # Add API token and SSL info to arguments
+        arguments_with_token = arguments.copy()
+        arguments_with_token['api_token'] = self.api_token
+        arguments_with_token['use_ssl'] = use_ssl
+
+        return await handle_log_search(arguments_with_token, host, port)
 
     async def _handle_log_check(self, arguments: Dict) -> dict[str, Any]:
         """Handle log check tool call"""
-        # Extract host and port from self.host
+        # Extract host, port, and protocol from self.host
         import re
-        match = re.match(r'https?://([^:]+):?(\d+)?', self.host)
+        match = re.match(r'(https?)://([^:]+):?(\d+)?', self.host)
         if match:
-            host = match.group(1)
-            port = int(match.group(2)) if match.group(2) else 8080
+            protocol = match.group(1)
+            host = match.group(2)
+            port = int(match.group(3)) if match.group(3) else (443 if protocol == 'https' else 8080)
+            use_ssl = protocol == 'https'
         else:
             host = self.host
             port = 8080
+            use_ssl = False
 
-        return await handle_log_check(arguments, host, port)
+        # Add API token and SSL info to arguments
+        arguments_with_token = arguments.copy()
+        arguments_with_token['api_token'] = self.api_token
+        arguments_with_token['use_ssl'] = use_ssl
+
+        return await handle_log_check(arguments_with_token, host, port)
 
     async def _handle_category_tool(
         self,
@@ -1245,8 +1350,11 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
                 target_endpoint = ep
                 break
             elif action == "get" and method == "get" and "{" in path and resource_id:
-                target_endpoint = ep
-                break
+                # Ensure it's a simple resource endpoint, not a status/action endpoint
+                if (path.count("{") == 1 and
+                    not any(word in path.lower() for word in ["status", "history", "action", "config"])):
+                    target_endpoint = ep
+                    break
             elif action == "create" and method == "post" and "{" not in path:
                 target_endpoint = ep
                 break
@@ -1281,8 +1389,25 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
 
         kwargs = {"headers": headers, "ssl": self.ssl}
 
-        if action == "list" and filters:
-            kwargs["params"] = filters
+        if action == "list":
+            # Prepare query parameters
+            params = filters.copy() if filters else {}
+
+            # Add default pagination for endpoints that require it
+            if "pagination" not in params:
+                # Check if this endpoint needs pagination based on OpenAPI spec
+                endpoint_def = None
+                for ep in self.category_endpoints.get(category, []):
+                    if ep["method"] == method and ep["path"] == path:
+                        endpoint_def = ep
+                        break
+
+                if endpoint_def and self._endpoint_requires_pagination(endpoint_def["path"]):
+                    default_pagination = self._get_default_pagination(category)
+                    params["pagination"] = json.dumps(default_pagination, separators=(',', ':'))
+
+            if params:
+                kwargs["params"] = params
         elif action in ["create", "update"] and data:
             headers["Content-Type"] = "application/json"
             kwargs["json"] = data
@@ -1307,13 +1432,34 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
 
     def _list_endpoints_filtered(self, arguments: Dict) -> dict[str, Any]:
         """
-        List API endpoints with optional filtering.
+        List API endpoints with optional filtering and smart prioritization.
         """
         category_filter = arguments.get("category")
         method_filter = arguments.get("method")
         search_term = arguments.get("search", "").lower()
+        intent_filter = arguments.get("intent", "all")
 
         results = []
+        priority_results = []
+
+        # Define priority categories for common searches
+        priority_mapping = {
+            "pool": ["ceph-pools"],  # Prioritize Ceph pools over DAOS pools
+            "rbd": ["rbds", "rbd-mirror"],
+            "osd": ["crush", "services", "maintenance", "servers", "disks"],  # OSD endpoints are spread across multiple tags
+            "server": ["servers"],
+            "service": ["services"],
+            "cluster": ["cluster"],
+            "log": ["logs"]
+        }
+
+        # Map intent to HTTP methods
+        intent_methods = {
+            "read": ["get"],
+            "write": ["post", "put", "patch"],
+            "manage": ["delete"],
+            "all": ["get", "post", "put", "delete", "patch"]
+        }
 
         for path, methods in self.api_spec.get("paths", {}).items():
             for method, operation in methods.items():
@@ -1324,13 +1470,46 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
                 if method_filter and method.lower() != method_filter.lower():
                     continue
 
+                # Apply intent filter
+                allowed_methods = intent_methods.get(intent_filter, intent_methods["all"])
+                if method.lower() not in allowed_methods:
+                    continue
+
                 tags = operation.get("tags", [])
                 if category_filter and category_filter not in tags:
                     continue
 
-                summary = operation.get("summary", "")
-                if search_term and search_term not in path.lower() and search_term not in summary.lower():
+                # Skip DAOS endpoints if not enabled
+                if not self.enable_daos and "daos" in tags:
                     continue
+
+                # Skip specialty features if not enabled
+                if not self.enable_specialty_features and any(tag in tags for tag in ["rbd-mirror", "qos-settings", "ceph-keys"]):
+                    continue
+
+                # Skip deprecated endpoints
+                if operation.get("deprecated", False):
+                    continue
+
+                summary = operation.get("summary", "")
+                if search_term:
+                    # Support both full phrase and individual word matching
+                    path_lower = path.lower()
+                    summary_lower = summary.lower()
+
+                    # Try exact phrase match first
+                    if search_term in path_lower or search_term in summary_lower:
+                        pass  # Found exact match, continue
+                    else:
+                        # Try individual word matching for multi-word searches
+                        search_words = search_term.split()
+                        if len(search_words) > 1:
+                            # All words must be found somewhere in path or summary
+                            if not all(word in path_lower or word in summary_lower for word in search_words):
+                                continue
+                        else:
+                            # Single word that didn't match exactly, skip
+                            continue
 
                 # Extract key LLM hints
                 llm_hints = operation.get("x-llm-hints", {})
@@ -1347,12 +1526,52 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
                 if llm_hints:
                     endpoint_data["llm_hints"] = llm_hints
 
-                results.append(endpoint_data)
+                # Check if this should be prioritized
+                is_priority = False
+                if search_term:
+                    priority_tags = priority_mapping.get(search_term, [])
+                    if any(tag in priority_tags for tag in tags):
+                        is_priority = True
+                    # Also prioritize if search term appears prominently in path or summary
+                    elif (search_term in path.lower() and path.lower().count(search_term) > 0) or \
+                         (search_term in summary.lower() and len(summary.split()) < 10):  # Short, focused descriptions
+                        is_priority = True
+
+                if is_priority:
+                    priority_results.append(endpoint_data)
+                else:
+                    results.append(endpoint_data)
+
+        # Combine priority results first, then others
+        all_results = priority_results + results
+
+        # Smart truncation - show more priority results
+        if len(priority_results) > 0:
+            max_results = min(50, 30 + len(priority_results))  # Show at least priority + some others
+        else:
+            max_results = 50  # Default limit when no priorities
+
+        # Add feature filtering info
+        filtering_info = ["Deprecated endpoints excluded"]
+        if not self.enable_daos:
+            filtering_info.append("DAOS endpoints excluded")
+        if not self.enable_specialty_features:
+            filtering_info.append("Specialty features excluded")
+        if intent_filter != "all":
+            filtering_info.append(f"Intent filter: {intent_filter}")
 
         return {
-            "total": len(results),
-            "endpoints": results[:100],  # Limit to prevent huge responses
-            "truncated": len(results) > 100
+            "total": len(all_results),
+            "priority_count": len(priority_results),
+            "endpoints": all_results[:max_results],
+            "truncated": len(all_results) > max_results,
+            "optimization_note": f"Prioritized {len(priority_results)} most relevant results" if priority_results else "No prioritization applied",
+            "filtering_applied": filtering_info if filtering_info else ["None"],
+            "intent_filter": intent_filter,
+            "feature_flags": {
+                "daos_enabled": self.enable_daos,
+                "specialty_features_enabled": self.enable_specialty_features
+            }
         }
 
     async def _call_endpoint_direct(self, arguments: Dict) -> dict[str, Any]:
@@ -1368,6 +1587,15 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
         # Replace path parameters
         for key, value in path_params.items():
             path = path.replace(f"{{{key}}}", str(value))
+
+        # Add default pagination for endpoints that require it
+        if method == "get" and query_params is not None:
+            query_params = query_params.copy()  # Don't modify the original
+            if "pagination" not in query_params and self._endpoint_requires_pagination(path):
+                # Determine category from endpoint path for appropriate defaults
+                category = self._detect_category_from_path(path)
+                default_pagination = self._get_default_pagination(category)
+                query_params["pagination"] = json.dumps(default_pagination, separators=(',', ':'))
 
         url = f"{self.host}/api{path}"
         headers = {
@@ -1385,6 +1613,179 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
             kwargs["json"] = body
 
         return await self._make_api_call(url=url, method=method, kwargs=kwargs)
+
+    def _quick_find_endpoints(self, arguments: Dict) -> dict[str, Any]:
+        """
+        Quick access to most relevant endpoints for a specific resource type.
+        """
+        resource_type = arguments.get("resource_type")
+        action_type = arguments.get("action_type", "all")
+
+        # Map resource types to exact categories
+        category_mapping = {
+            "ceph-pools": "ceph-pools",
+            "rbds": "rbds",
+            "rbd-mirror": "rbd-mirror",
+            "osds": ["crush", "services", "maintenance", "servers", "disks"],  # OSD is spread across categories
+            "servers": "servers",
+            "services": "services",
+            "cluster": "cluster",
+            "logs": "logs",
+            "stats": "stats"
+        }
+
+        target_categories = category_mapping.get(resource_type)
+        if not target_categories:
+            return {"error": f"Unknown resource type: {resource_type}"}
+
+        # Handle both single category and list of categories
+        if isinstance(target_categories, str):
+            target_categories = [target_categories]
+
+        results = []
+        for path, methods in self.api_spec.get("paths", {}).items():
+            for method, operation in methods.items():
+                if method.lower() not in ["get", "post", "put", "delete", "patch"]:
+                    continue
+
+                tags = operation.get("tags", [])
+                # Check if any of the target categories match
+                if not any(cat in tags for cat in target_categories):
+                    continue
+
+                # Skip deprecated endpoints
+                if operation.get("deprecated", False):
+                    continue
+
+                # Filter by action type if specified
+                if action_type != "all":
+                    method_lower = method.lower()
+                    if action_type == "list" and not (method_lower == "get" and "{" not in path):
+                        continue
+                    elif action_type == "create" and method_lower != "post":
+                        continue
+                    elif action_type == "status" and "status" not in path.lower():
+                        continue
+                    elif action_type == "manage" and method_lower == "get":
+                        continue
+
+                # Build endpoint data
+                llm_hints = operation.get("x-llm-hints", {})
+                endpoint_data = {
+                    "path": path,
+                    "method": method.upper(),
+                    "operationId": operation.get("operationId", ""),
+                    "summary": operation.get("summary", ""),
+                    "tags": tags,
+                    "deprecated": operation.get("deprecated", False)
+                }
+
+                if llm_hints:
+                    endpoint_data["llm_hints"] = llm_hints
+
+                results.append(endpoint_data)
+
+        # Sort by relevance (GET endpoints first, then by path simplicity)
+        results.sort(key=lambda x: (
+            0 if x["method"] == "GET" else 1,
+            x["path"].count("/"),
+            x["path"]
+        ))
+
+        return {
+            "resource_type": resource_type,
+            "action_filter": action_type,
+            "total": len(results),
+            "endpoints": results[:20],  # Limit to top 20 most relevant
+            "truncated": len(results) > 20,
+            "optimization_note": f"Showing most relevant {target_category} endpoints"
+        }
+
+    def _endpoint_requires_pagination(self, endpoint_path: str) -> bool:
+        """
+        Check if an endpoint requires pagination parameter based on OpenAPI spec.
+        Supports both exact paths and parameterized paths.
+        """
+        # First try exact match
+        endpoint_spec = self.api_spec.get("paths", {}).get(endpoint_path, {}).get("get", {})
+
+        if endpoint_spec:
+            parameters = endpoint_spec.get("parameters", [])
+            for param in parameters:
+                if param.get("name") == "pagination" and param.get("required", False):
+                    return True
+
+        # If no exact match, try pattern matching for parameterized paths
+        for spec_path, methods in self.api_spec.get("paths", {}).items():
+            if self._path_matches_template(endpoint_path, spec_path):
+                get_spec = methods.get("get", {})
+                parameters = get_spec.get("parameters", [])
+                for param in parameters:
+                    if param.get("name") == "pagination" and param.get("required", False):
+                        return True
+
+        return False
+
+    def _path_matches_template(self, actual_path: str, template_path: str) -> bool:
+        """
+        Check if an actual path matches a template path with parameters.
+        e.g., '/pools/test-pool/rbds' matches '/pools/{pool}/rbds'
+        """
+        import re
+
+        # Convert template to regex pattern
+        # Replace {param} with regex that matches path segments
+        pattern = re.escape(template_path)
+        pattern = re.sub(r'\\\{[^}]+\\\}', r'[^/]+', pattern)
+        pattern = f'^{pattern}$'
+
+        return bool(re.match(pattern, actual_path))
+
+    def _detect_category_from_path(self, path: str) -> str:
+        """
+        Detect the likely category from an endpoint path.
+        """
+        path_lower = path.lower()
+
+        # RBD-related endpoints
+        if "/rbds" in path_lower or "/rbd-" in path_lower:
+            return "rbds"
+
+        # Pool-related endpoints
+        if "/pools" in path_lower:
+            return "ceph-pools"
+
+        # Other patterns
+        if "/crush" in path_lower:
+            return "crush"
+        if "/servers" in path_lower:
+            return "servers"
+        if "/services" in path_lower:
+            return "services"
+
+        # Default
+        return "generic"
+
+    def _get_default_pagination(self, category: str) -> dict:
+        """
+        Get appropriate default pagination for a category.
+        """
+        # Category-specific defaults
+        if category == "rbds":
+            return {
+                "limit": 20,
+                "after": 0,
+                "where": {},
+                "sortBy": [["pool", "ASC"], ["namespace", "ASC"], ["name", "ASC"]]
+            }
+
+        # Generic default
+        return {
+            "limit": 20,
+            "after": 0,
+            "where": {},
+            "sortBy": []
+        }
 
     async def cleanup(self):
         """Cleanup resources."""
@@ -1429,6 +1830,16 @@ async def main():
         default=os.environ.get("OPENAPI_FILE"),
         help="Use local OpenAPI spec file instead of fetching from server",
     )
+    parser.add_argument(
+        "--enable-daos",
+        action="store_true",
+        help="Enable DAOS-specific tools and endpoints (reduces tool count by ~30 when disabled)",
+    )
+    parser.add_argument(
+        "--disable-specialty-features",
+        action="store_true",
+        help="Disable specialty features like rbd-mirror, qos-settings (further reduces tool count)",
+    )
     args = parser.parse_args()
 
     server = CroitCephServer(
@@ -1437,6 +1848,8 @@ async def main():
         offer_whole_spec=args.offer_whole_spec,
         max_category_tools=args.max_category_tools,
         openapi_file=args.openapi_file,
+        enable_daos=args.enable_daos,
+        enable_specialty_features=not args.disable_specialty_features,
     )
     # Set permission check flag
     server.check_permissions = args.check_permissions

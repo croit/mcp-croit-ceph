@@ -20,27 +20,37 @@ Organized by functional areas like:
 - `croit_services_*`: Service management
 - `croit_cluster_*`: Cluster operations
 
-### 3. Log Search Tools
+### 3. VictoriaLogs Integration
 
 #### `croit_log_search`
-Natural language log searching with pattern detection.
+**Revolutionary direct VictoriaLogs JSON interface** - No translation layer!
 
-**Examples:**
+**Direct VictoriaLogs Syntax:**
+```json
+{
+  "where": {
+    "_and": [
+      {"_SYSTEMD_UNIT": {"_contains": "ceph-osd@12"}},
+      {"PRIORITY": {"_lte": 4}}
+    ]
+  },
+  "hours_back": 1
+}
 ```
-"Find OSD failures in the last hour"
-"Show slow requests on node5"
-"What errors occurred during pool creation"
-"Debug authentication failures"
-```
 
-**Returns:**
-- Generated LogsQL query
-- Matching logs (limited to 100)
-- Detected patterns (error clusters, bursts)
-- Insights and recommendations
+**Comprehensive Operators:**
+- **String:** `_eq`, `_contains`, `_starts_with`, `_regex`
+- **Numeric:** `_eq`, `_neq`, `_gt`, `_gte`, `_lt`, `_lte`
+- **Lists:** `_in`, `_nin`
+- **Logic:** `_and`, `_or`, `_not`
 
-#### `croit_log_monitor`
-Real-time log monitoring for specific conditions.
+**All Ceph Fields Supported:**
+- `_SYSTEMD_UNIT`, `PRIORITY`, `CROIT_SERVER_ID`
+- `_TRANSPORT`, `_HOSTNAME`, `_MACHINE_ID`
+- `SYSLOG_IDENTIFIER`, `THREAD`, `MESSAGE`
+
+#### `croit_log_check`
+Instant log condition checking (non-blocking).
 
 **Usage:**
 ```json
@@ -189,13 +199,53 @@ _filter_field=!value         # Not equals
 - Check required parameters in schema
 - Review error message for specifics
 
+## VictoriaLogs Real-World Examples
+
+### Monitor Logs on Server 1
+```json
+{
+  "where": {
+    "_and": [
+      {"_SYSTEMD_UNIT": {"_contains": "ceph-mon"}},
+      {"PRIORITY": {"_lte": 6}},
+      {"CROIT_SERVER_ID": {"_eq": "1"}}
+    ]
+  }
+}
+```
+
+### Kernel Errors with Text Search
+```json
+{
+  "where": {
+    "_and": [
+      {"_TRANSPORT": {"_eq": "kernel"}},
+      {"PRIORITY": {"_lte": 4}}
+    ]
+  },
+  "_search": "error"
+}
+```
+
+### Multiple OSDs, Specific Priority Range
+```json
+{
+  "where": {
+    "_and": [
+      {"_SYSTEMD_UNIT": {"_regex": "ceph-osd@(12|13|14)"}},
+      {"PRIORITY": {"_in": [0, 1, 2, 3, 4]}}
+    ]
+  }
+}
+```
+
 ## Tips for Effective Use
 
-1. **Combine tools**: Use logs to understand issues, then API calls to fix them
-2. **Think in patterns**: Look for recurring issues, not just individual errors
-3. **Use natural language**: The log search understands context and intent
-4. **Monitor changes**: Use log monitoring during maintenance operations
-5. **Document findings**: Note patterns for future reference
+1. **Direct VictoriaLogs**: Use JSON syntax for precise control
+2. **Current time context**: Timestamps are provided automatically
+3. **Control messages**: Listen for "empty", "too_wide" feedback
+4. **Combine tools**: Use logs to understand issues, then API calls to fix them
+5. **Smart filtering**: Start broad, then narrow with specific operators
 
 ## Mode Selection
 
@@ -207,3 +257,46 @@ The server operates in different modes:
 - **endpoints_as_tools**: Each API endpoint as individual tool (verbose)
 
 Choose based on your preference for organization vs. flexibility.
+
+## Performance Optimization Flags
+
+### Feature Flags (Startup)
+```bash
+# Disable DAOS endpoints (saves ~54 endpoints, 9.3% reduction)
+--enable-daos=false
+
+# Disable specialty features (saves ~30 endpoints, 5.2% reduction)
+--disable-specialty-features
+
+# Maximum reduction (saves ~84 endpoints, 14.5% reduction)
+--disable-specialty-features
+```
+
+### Intent-based Filtering (Runtime)
+```bash
+# When searching endpoints, specify your intent:
+list_endpoints(search="pool", intent="read")    # Only GET operations
+list_endpoints(search="rbd", intent="write")    # Only POST/PUT/PATCH
+list_endpoints(search="osd", intent="read")     # OSD status/metadata (works!)
+list_endpoints(search="osd", intent="manage")   # Only DELETE operations
+
+# Quick access to specific resource types:
+quick_find(resource_type="osds")                # All OSD-related endpoints
+quick_find(resource_type="ceph-pools")          # Only Ceph pool endpoints
+```
+
+### Token Savings Examples
+```
+Standard pool search: 81 endpoints
++ deprecated filtered: 80 endpoints (1% reduction)
++ intent="read": 33 endpoints (59% reduction)
++ intent="write": 36 endpoints (56% reduction)
++ intent="manage": 12 endpoints (85% reduction)
++ priority + intent: ~9 endpoints (89% reduction)
+
+Total API: 580 endpoints
++ deprecated filtered: 573 endpoints (1.2% reduction)
++ DAOS disabled: 519 endpoints (10.5% reduction)
++ specialty disabled: 489 endpoints (15.7% reduction)
++ all flags: 482 endpoints (16.9% reduction)
+```

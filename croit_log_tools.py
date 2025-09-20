@@ -74,6 +74,23 @@ class LogSearchIntentParser:
             levels.update(pattern['levels'])
             keywords.update(pattern['keywords'])
 
+        # Check for explicit level requests in text
+        intent_lower = intent.lower()
+        if 'all level' in intent_lower or 'all log' in intent_lower or 'everything' in intent_lower:
+            # User wants all log levels - clear any pattern-based filters
+            levels = set()
+        elif 'info' in intent_lower and 'info' not in ' '.join(keywords).lower():
+            levels.add('INFO')
+        elif 'debug' in intent_lower:
+            levels.add('DEBUG')
+        elif 'trace' in intent_lower:
+            levels.add('TRACE')
+
+        # Only default to ERROR/WARN if user is explicitly looking for problems
+        # If no levels set and no explicit problem words, return all levels
+        if not levels and not any(word in intent_lower for word in ['error', 'fail', 'problem', 'issue', 'crash', 'wrong']):
+            levels = set()  # Empty means no filter - get all levels
+
         # Parse time range
         time_range = self._parse_time_range(intent)
 
@@ -83,7 +100,7 @@ class LogSearchIntentParser:
         return {
             'type': query_type,
             'services': list(services),
-            'levels': list(levels) if levels else ['ERROR', 'WARN'],
+            'levels': list(levels) if levels else [],  # Empty list = no level filter = all logs
             'keywords': list(keywords),
             'time_range': time_range
         }
@@ -91,33 +108,71 @@ class LogSearchIntentParser:
     def _parse_time_range(self, text: str) -> Dict[str, str]:
         """Extract time range from text"""
         now = datetime.now()
+        text_lower = text.lower()
 
         # Pattern matching for time expressions
         patterns = {
             'last hour': timedelta(hours=1),
+            'past hour': timedelta(hours=1),
             'last day': timedelta(days=1),
+            'past day': timedelta(days=1),
             'last week': timedelta(days=7),
             'recent': timedelta(minutes=15),
         }
 
         for pattern, delta in patterns.items():
-            if pattern in text:
+            if pattern in text_lower:
                 return {
                     'start': (now - delta).isoformat() + 'Z',
                     'end': now.isoformat() + 'Z'
                 }
 
-        # Check for relative time
-        match = re.search(r'last (\d+) (minute|hour|day)s?', text)
+        # Check for "X ago" pattern (e.g., "one hour ago", "5 minutes ago")
+        match = re.search(r'(\d+|one|two|three|four|five|six|seven|eight|nine|ten)\s+(second|minute|hour|day|week)s?\s+ago', text_lower)
         if match:
-            amount = int(match.group(1))
+            amount_str = match.group(1)
             unit = match.group(2)
+
+            # Convert word numbers to digits
+            word_to_num = {
+                'one': 1, 'two': 2, 'three': 3, 'four': 4, 'five': 5,
+                'six': 6, 'seven': 7, 'eight': 8, 'nine': 9, 'ten': 10
+            }
+            amount = word_to_num.get(amount_str, int(amount_str) if amount_str.isdigit() else 1)
+
+            if 'second' in unit:
+                delta = timedelta(seconds=amount)
+            elif 'minute' in unit:
+                delta = timedelta(minutes=amount)
+            elif 'hour' in unit:
+                delta = timedelta(hours=amount)
+            elif 'day' in unit:
+                delta = timedelta(days=amount)
+            elif 'week' in unit:
+                delta = timedelta(weeks=amount)
+            else:
+                delta = timedelta(hours=1)
+
+            return {
+                'start': (now - delta).isoformat() + 'Z',
+                'end': now.isoformat() + 'Z'
+            }
+
+        # Check for relative time with "last/past"
+        match = re.search(r'(last|past)\s+(\d+)\s+(minute|hour|day|week)s?', text_lower)
+        if match:
+            amount = int(match.group(2))
+            unit = match.group(3)
             if 'minute' in unit:
                 delta = timedelta(minutes=amount)
             elif 'hour' in unit:
                 delta = timedelta(hours=amount)
-            else:
+            elif 'day' in unit:
                 delta = timedelta(days=amount)
+            elif 'week' in unit:
+                delta = timedelta(weeks=amount)
+            else:
+                delta = timedelta(hours=1)
 
             return {
                 'start': (now - delta).isoformat() + 'Z',
@@ -173,12 +228,18 @@ class LogsQLBuilder:
 class CroitLogSearchClient:
     """Client for Croit log searching via WebSocket"""
 
-    def __init__(self, host: str, port: int = 8080, api_token: Optional[str] = None):
+    def __init__(self, host: str, port: int = 8080, api_token: Optional[str] = None, use_ssl: bool = False):
         self.host = host
         self.port = port
         self.api_token = api_token
-        self.ws_url = f"ws://{host}:{port}/api/logs"
-        self.http_url = f"http://{host}:{port}"
+        self.use_ssl = use_ssl
+
+        # Build URLs with correct protocol
+        ws_protocol = "wss" if use_ssl else "ws"
+        http_protocol = "https" if use_ssl else "http"
+        self.ws_url = f"{ws_protocol}://{host}:{port}/api/logs"
+        self.http_url = f"{http_protocol}://{host}:{port}"
+
         self.parser = LogSearchIntentParser()
         self.builder = LogsQLBuilder()
 
@@ -406,34 +467,154 @@ class CroitLogSearchClient:
 
         return insights
 
+async def _execute_croit_websocket(host: str, port: int, api_token: str, use_ssl: bool, query: Dict) -> List[Dict]:
+    """Execute direct Croit WebSocket query with VictoriaLogs JSON format"""
+    import json
+    import asyncio
+    import websockets
+
+    # Build WebSocket URL
+    ws_protocol = "wss" if use_ssl else "ws"
+    ws_url = f"{ws_protocol}://{host}:{port}/api/logs"
+
+    logs = []
+    control_messages = []
+
+    try:
+        async with websockets.connect(
+            ws_url,
+            ping_interval=20
+        ) as websocket:
+            # CRITICAL: Send auth token as binary data (first message)
+            if api_token:
+                await websocket.send(api_token.encode('utf-8'))
+
+            # Send Croit JSON query
+            await websocket.send(json.dumps(query))
+
+            # Collect log entries
+            start_time = asyncio.get_event_loop().time()
+            while (asyncio.get_event_loop().time() - start_time) < 30:  # 30 second timeout
+                try:
+                    response = await asyncio.wait_for(
+                        websocket.recv(),
+                        timeout=5.0
+                    )
+                    if response:
+                        # Handle control messages
+                        if response == "clear":
+                            control_messages.append({"type": "clear", "message": "Log display cleared"})
+                        elif response == "empty":
+                            control_messages.append({"type": "empty", "message": "No logs found for current query"})
+                        elif response == "too_wide":
+                            control_messages.append({"type": "too_wide", "message": "Query too broad (>1M logs), please add more filters"})
+                        elif response.startswith("hits:"):
+                            try:
+                                hits_data = json.loads(response[5:].strip()) if response[5:].strip() != "null" else None
+                                control_messages.append({"type": "hits", "data": hits_data})
+                            except json.JSONDecodeError:
+                                logger.warning(f"Failed to parse hits data: {response}")
+                        elif response.startswith("error:"):
+                            error_msg = response[6:].strip()
+                            control_messages.append({"type": "error", "message": error_msg})
+                            logger.error(f"VictoriaLogs error: {error_msg}")
+                        else:
+                            # Regular log entry
+                            try:
+                                log_entry = json.loads(response)
+                                logs.append(log_entry)
+                            except json.JSONDecodeError:
+                                logger.warning(f"Non-JSON response: {response[:100]}")
+                except asyncio.TimeoutError:
+                    break
+                except websockets.exceptions.ConnectionClosed:
+                    break
+
+    except Exception as e:
+        logger.error(f"WebSocket query failed: {e}")
+        raise
+
+    return {
+        "logs": logs,
+        "control_messages": control_messages
+    }
+
 # Integration functions for MCP Server
 async def handle_log_search(arguments: Dict, host: str, port: int = 8080) -> Dict[str, Any]:
-    """Handle log search tool call"""
+    """Handle direct VictoriaLogs JSON query"""
+    import time
+    from datetime import datetime, timedelta
 
-    search_query = arguments.get('search', '')
+    where_clause = arguments.get('where')
+    search_text = arguments.get('_search', '')
     limit = arguments.get('limit', 1000)
+    after = arguments.get('after', 0)
+    hours_back = arguments.get('hours_back', 1)
+    start_timestamp = arguments.get('start_timestamp')
+    end_timestamp = arguments.get('end_timestamp')
     api_token = arguments.get('api_token')
+    use_ssl = arguments.get('use_ssl', False)
 
-    if not search_query:
+    if not where_clause:
         return {
             "code": 400,
-            "error": "Search query is required"
+            "error": "VictoriaLogs 'where' clause is required"
         }
 
     try:
-        client = CroitLogSearchClient(host, port, api_token)
-        result = await client.search_logs(search_query, limit)
+        # Calculate time range
+        if start_timestamp and end_timestamp:
+            start = start_timestamp
+            end = end_timestamp
+        else:
+            end = int(time.time())
+            start = end - (hours_back * 3600)
+
+        # Build Croit WebSocket query
+        croit_query = {
+            "type": "query",
+            "start": start,
+            "end": end,
+            "query": {
+                "where": where_clause,
+                "_search": search_text,
+                "after": after,
+                "limit": limit
+            }
+        }
+
+        # Execute query via WebSocket
+        response = await _execute_croit_websocket(host, port, api_token, use_ssl, croit_query)
+        logs = response["logs"]
+        control_messages = response["control_messages"]
 
         return {
             "code": 200,
-            "result": result
+            "result": {
+                "logs": logs,
+                "total_count": len(logs),
+                "control_messages": control_messages,
+                "time_range": {
+                    "start_timestamp": start,
+                    "end_timestamp": end,
+                    "hours_searched": hours_back
+                }
+            },
+            "debug": {
+                "croit_query": croit_query,
+                "where_clause": where_clause,
+                "time_range_human": f"{datetime.fromtimestamp(start)} to {datetime.fromtimestamp(end)}"
+            }
         }
 
     except Exception as e:
         logger.error(f"Log search failed: {e}")
         return {
             "code": 500,
-            "error": str(e)
+            "error": str(e),
+            "debug": {
+                "attempted_query": croit_query if 'croit_query' in locals() else None
+            }
         }
 
 async def handle_log_check(arguments: Dict, host: str, port: int = 8080) -> Dict[str, Any]:
@@ -446,6 +627,7 @@ async def handle_log_check(arguments: Dict, host: str, port: int = 8080) -> Dict
     alert_threshold = arguments.get('threshold', 5)
     time_window = arguments.get('time_window', 300)  # Check last 5 minutes by default
     api_token = arguments.get('api_token')
+    use_ssl = arguments.get('use_ssl', False)
 
     if not conditions:
         return {
@@ -454,7 +636,7 @@ async def handle_log_check(arguments: Dict, host: str, port: int = 8080) -> Dict
         }
 
     try:
-        client = CroitLogSearchClient(host, port, api_token)
+        client = CroitLogSearchClient(host, port, api_token, use_ssl)
         alerts = []
         checks = []
 
@@ -513,51 +695,261 @@ async def handle_log_monitor(arguments: Dict, host: str, port: int = 8080) -> Di
 LOG_SEARCH_TOOLS = [
     {
         "name": "croit_log_search",
-        "description": "Search Croit logs using natural language queries. Examples: 'Find OSD failures in the last hour', 'Show slow requests', 'What errors occurred today'",
+        "description": """Search Croit/Ceph cluster logs using comprehensive VictoriaLogs JSON syntax.
+
+AVAILABLE FILTER FIELDS:
+• _SYSTEMD_UNIT: systemd service unit (string) - e.g. "ceph-mon", "ceph-osd@12"
+• PRIORITY: log priority/severity (integer: 0=emerg, 1=alert, 2=crit, 3=err, 4=warning, 5=notice, 6=info, 7=debug)
+• CROIT_SERVER_ID: specific Ceph node ID (string/integer) - e.g. "1", "2", "3"
+• MESSAGE: log message content (string)
+• _TRANSPORT: log transport method (string) - e.g. "kernel", "syslog", "journal"
+• _HOSTNAME: server hostname (string) - e.g. "storage-node-01"
+• _MACHINE_ID: unique machine identifier (string)
+• SYSLOG_IDENTIFIER: service identifier (string) - e.g. "ceph-osd"
+• THREAD: thread identifier (string) - e.g. "worker-1"
+• _search: full-text search across all fields (string) - searches within message content
+
+COMPARISON OPERATORS:
+
+STRING OPERATORS:
+• _eq: exact match {"field": {"_eq": "value"}}
+• _contains: substring match {"field": {"_contains": "substring"}}
+• _starts_with: prefix match {"MESSAGE": {"_starts_with": "ERROR:"}}
+• _ends_with: suffix match {"MESSAGE": {"_ends_with": "failed"}}
+
+NUMERIC OPERATORS:
+• _eq: exact equal {"PRIORITY": {"_eq": 4}}
+• _neq: not equal {"PRIORITY": {"_neq": 7}}
+• _gt: greater than {"PRIORITY": {"_gt": 3}}
+• _gte: greater than or equal {"PRIORITY": {"_gte": 4}}
+• _lt: less than {"PRIORITY": {"_lt": 6}}
+• _lte: less than or equal {"PRIORITY": {"_lte": 6}}
+
+LIST/ARRAY OPERATORS:
+• _in: value in list {"PRIORITY": {"_in": [0, 1, 2, 3]}}
+• _nin: value not in list {"CROIT_SERVER_ID": {"_nin": ["1", "2"]}}
+
+PATTERN OPERATORS:
+• _regex: regular expression match {"MESSAGE": {"_regex": "OSD\\.[0-9]+"}}
+
+EXISTENCE OPERATORS:
+• _exists: field exists {"OPTIONAL_FIELD": {"_exists": true}}
+• _missing: field missing {"OPTIONAL_FIELD": {"_missing": true}}
+
+LOGICAL OPERATORS:
+• _and: logical AND - all conditions must match
+• _or: logical OR - at least one condition must match
+• _not: negation - condition must NOT match
+
+CEPH SERVICE MAPPING:
+• OSD N: {"_SYSTEMD_UNIT": {"_contains": "ceph-osd@N"}}
+• Monitor: {"_SYSTEMD_UNIT": {"_contains": "ceph-mon"}}
+• Manager: {"_SYSTEMD_UNIT": {"_contains": "ceph-mgr"}}
+• MDS: {"_SYSTEMD_UNIT": {"_contains": "ceph-mds"}}
+• RGW: {"_SYSTEMD_UNIT": {"_contains": "ceph-radosgw"}}
+
+TRANSPORT TYPES:
+• kernel: Kernel-level logs (hardware, drivers, low-level system)
+• syslog: Standard system logs
+• journal: Systemd journal logs
+
+COMPLEX QUERY EXAMPLES:
+
+1. Monitor logs on server 1 (from your example):
+{"where": {"_and": [
+  {"_SYSTEMD_UNIT": {"_contains": "ceph-mon"}},
+  {"PRIORITY": {"_lte": 6}},
+  {"CROIT_SERVER_ID": {"_eq": "1"}}
+]}}
+
+2. Kernel logs on server 1:
+{"where": {"_and": [
+  {"_TRANSPORT": {"_eq": "kernel"}},
+  {"PRIORITY": {"_lte": 6}},
+  {"CROIT_SERVER_ID": {"_eq": "1"}}
+]}}
+
+3. Kernel logs with error search (note _search is outside where clause):
+{
+  "where": {"_and": [
+    {"_TRANSPORT": {"_eq": "kernel"}},
+    {"PRIORITY": {"_lte": 6}},
+    {"CROIT_SERVER_ID": {"_eq": "1"}}
+  ]},
+  "_search": "error"
+}
+
+4. OSD 12 errors and warnings only:
+{"where": {"_and": [
+  {"_SYSTEMD_UNIT": {"_contains": "ceph-osd@12"}},
+  {"PRIORITY": {"_lte": 4}}
+]}}
+
+5. Critical errors on specific server:
+{"where": {"_and": [
+  {"PRIORITY": {"_lte": 3}},
+  {"CROIT_SERVER_ID": {"_eq": "1"}}
+]}}
+
+3. Multiple priority levels (errors + warnings):
+{"where": {"PRIORITY": {"_in": [3, 4]}}}
+
+4. Exclude specific servers from search:
+{"where": {"_and": [
+  {"_SYSTEMD_UNIT": {"_contains": "ceph-osd"}},
+  {"CROIT_SERVER_ID": {"_not_in": ["1", "2", "3"]}}
+]}}
+
+5. Info and above (exclude debug):
+{"where": {"PRIORITY": {"_ne": 7}}}
+
+6. Monitor OR manager logs with text search:
+{"where": {"_and": [
+  {"_or": [
+    {"_SYSTEMD_UNIT": {"_contains": "ceph-mon"}},
+    {"_SYSTEMD_UNIT": {"_contains": "ceph-mgr"}}
+  ]},
+  {"_search": "election"}
+]}}
+
+7. Range filtering - warnings to critical:
+{"where": {"_and": [
+  {"PRIORITY": {"_gte": 2}},
+  {"PRIORITY": {"_lte": 4}}
+]}}
+
+8. Error messages with specific prefix:
+{"where": {"_and": [
+  {"PRIORITY": {"_lt": 5}},
+  {"MESSAGE": {"_starts_with": "failed to"}}
+]}}
+
+9. Complex filtering with message content:
+{"where": {"_and": [
+  {"_SYSTEMD_UNIT": {"_contains": "ceph-osd"}},
+  {"PRIORITY": {"_lte": 6}},
+  {"_or": [
+    {"MESSAGE": {"_contains": "slow"}},
+    {"MESSAGE": {"_contains": "timeout"}}
+  ]},
+  {"_not": {"MESSAGE": {"_contains": "heartbeat"}}}
+]}}
+
+10. Multiple OSDs with priority filtering:
+{"where": {"_and": [
+  {"_or": [
+    {"_SYSTEMD_UNIT": {"_contains": "ceph-osd@12"}},
+    {"_SYSTEMD_UNIT": {"_contains": "ceph-osd@13"}},
+    {"_SYSTEMD_UNIT": {"_contains": "ceph-osd@14"}}
+  ]},
+  {"PRIORITY": {"_in": [0, 1, 2, 3, 4]}}
+]}}
+
+PRIORITY LEVELS (syslog standard):
+• 0: Emergency (system unusable)
+• 1: Alert (immediate action required)
+• 2: Critical (critical conditions)
+• 3: Error (error conditions)
+• 4: Warning (warning conditions)
+• 5: Notice (normal but significant)
+• 6: Info (informational messages)
+• 7: Debug (debug-level messages)
+
+NESTED LOGIC SUPPORT:
+Use unlimited nesting with _and/_or/_not for complex conditions.
+
+TIME CONTROL:
+• hours_back: number of hours to search back (default: 1)
+• start_timestamp/end_timestamp: explicit Unix timestamps
+
+OUTPUT: Logs + debug info showing exact query sent to VictoriaLogs""",
         "inputSchema": {
             "type": "object",
             "properties": {
-                "search": {
+                "where": {
+                    "type": "object",
+                    "description": "VictoriaLogs JSON where clause (see examples above)"
+                },
+                "_search": {
                     "type": "string",
-                    "description": "Natural language search query"
+                    "default": "",
+                    "description": "Full-text search string (optional) - searches within message content"
                 },
                 "limit": {
                     "type": "integer",
                     "default": 1000,
                     "description": "Maximum number of logs to return"
                 },
-                "api_token": {
-                    "type": "string",
-                    "description": "Optional API token for authentication"
+                "after": {
+                    "type": "integer",
+                    "default": 0,
+                    "description": "Offset for pagination (number of logs to skip)"
+                },
+                "hours_back": {
+                    "type": "integer",
+                    "default": 1,
+                    "description": "Hours to search back from now (ignored if timestamps provided)"
+                },
+                "start_timestamp": {
+                    "type": "integer",
+                    "description": "Unix timestamp start (optional)"
+                },
+                "end_timestamp": {
+                    "type": "integer",
+                    "description": "Unix timestamp end (optional)"
                 }
             },
-            "required": ["search"]
+            "required": ["where"]
         }
     },
     {
         "name": "croit_log_check",
-        "description": "Check log conditions immediately (snapshot). Returns which conditions are currently triggered without blocking.",
+        "description": """Check specific log conditions instantly (non-blocking snapshot).
+
+USE CASES:
+• Quick health checks: "Are there any OSD failures right now?"
+• Validation after operations: "Check for errors after pool creation"
+• Threshold monitoring: "Alert if more than 5 slow requests"
+
+CONDITIONS FORMAT:
+• Natural language conditions to check
+• Each condition is evaluated separately
+• Returns matches for each condition
+
+EXAMPLES:
+• conditions: ["OSD failures", "slow requests over 5s", "authentication errors"]
+• conditions: ["pool full warnings", "network timeouts"]
+• conditions: ["any ERROR level logs"]
+
+PARAMETERS:
+• threshold: How many logs must match to trigger alert (default: 5)
+• time_window: Check logs from last N seconds (default: 300 = 5 minutes)
+
+RETURNS:
+• List of triggered conditions with matching log counts
+• Sample of matching logs for each condition
+• Overall status (triggered/clear)""",
         "inputSchema": {
             "type": "object",
             "properties": {
                 "conditions": {
                     "type": "array",
                     "items": {"type": "string"},
-                    "description": "List of conditions to check (natural language)"
+                    "description": "List of conditions to check in natural language"
                 },
                 "threshold": {
                     "type": "integer",
                     "default": 5,
-                    "description": "Alert threshold (number of matching logs)"
+                    "description": "Number of matching logs to trigger alert (default: 5)"
                 },
                 "time_window": {
                     "type": "integer",
                     "default": 300,
-                    "description": "Time window to check in seconds (default: 5 minutes)"
+                    "description": "Time window in seconds to check (default: 300 = 5 min)"
                 },
                 "api_token": {
                     "type": "string",
-                    "description": "Optional API token"
+                    "description": "Optional API token for authentication"
                 }
             },
             "required": ["conditions"]

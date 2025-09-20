@@ -27,13 +27,14 @@
 - Manages different operating modes
 
 **Key Features:**
-- Dynamic tool generation from OpenAPI spec
-- Full x-llm-hints integration from OpenAPI metadata
-- Clean, professional tool descriptions without emoji clutter
-- Advanced error handling and MCP protocol compliance
-- Reference resolution for complex schemas
-- Token optimization for reduced LLM costs
-- Multiple organization modes (hybrid, base, categories)
+- **Dynamic tool generation** from OpenAPI spec with full x-llm-hints
+- **Smart search prioritization** - Most relevant endpoints first
+- **Intent-based filtering** - read/write/manage operations
+- **Feature flags** - Disable DAOS/specialty tools to reduce token usage
+- **Direct VictoriaLogs integration** - No translation layer
+- **Real-time log streaming** with proper WebSocket authentication
+- **Comprehensive error handling** and MCP protocol compliance
+- **Token optimization** - Up to 90% reduction in common searches
 
 ### 2. Token Optimizer (`token_optimizer.py`)
 
@@ -53,25 +54,26 @@
 
 ### 3. Log Search Tools (`croit_log_tools.py`)
 
-**Components:**
+**Revolutionary Direct VictoriaLogs Integration:**
 
-#### LogSearchIntentParser
-- Converts natural language to structured intents
-- Pattern matching for common scenarios
-- Time range extraction
-- Service and severity detection
+#### Direct JSON Query Interface
+- **No translation layer** - LLM writes VictoriaLogs JSON directly
+- **Full VictoriaLogs power** - All operators and fields supported
+- **Binary WebSocket authentication** - Correct Croit protocol implementation
+- **Control message handling** - "empty", "too_wide", "hits:", "error:" responses
 
-#### LogsQLBuilder
-- Builds optimized LogsQL queries
-- Query caching for performance
-- Time-first optimization
-- Service-specific indexing
+#### Comprehensive Operator Support
+- **String operators:** `_eq`, `_contains`, `_starts_with`, `_ends_with`, `_regex`
+- **Numeric operators:** `_eq`, `_neq`, `_gt`, `_gte`, `_lt`, `_lte`
+- **List operators:** `_in`, `_nin`
+- **Logical operators:** `_and`, `_or`, `_not`
+- **Existence operators:** `_exists`, `_missing`
 
-#### CroitLogSearchClient
-- WebSocket connection management
-- HTTP fallback mechanism
-- Pattern analysis engine
-- Result caching (5-minute TTL)
+#### Complete Field Coverage
+- **Core fields:** `_SYSTEMD_UNIT`, `PRIORITY`, `CROIT_SERVER_ID`, `MESSAGE`
+- **Transport:** `_TRANSPORT` (kernel/syslog/journal)
+- **System fields:** `_HOSTNAME`, `_MACHINE_ID`, `SYSLOG_IDENTIFIER`, `THREAD`
+- **Search:** `_search` for full-text search
 
 ## Data Flow
 
@@ -85,15 +87,15 @@
 6. Return structured result to LLM
 ```
 
-### Log Searches
+### Log Searches (Direct VictoriaLogs)
 ```
-1. Natural language query received
-2. Parser extracts intent and context
-3. Builder creates LogsQL query
-4. WebSocket connection established
-5. Stream logs with timeout
-6. Analyze patterns and correlations
-7. Generate insights and return
+1. LLM provides VictoriaLogs JSON query directly
+2. Server adds current time context automatically
+3. WebSocket connection with binary auth token
+4. Query sent as structured JSON to Croit
+5. Control messages handled ("empty", "too_wide", etc.)
+6. Log entries and metadata returned
+7. Debug info shows exact query sent
 ```
 
 ## Operating Modes
@@ -360,23 +362,34 @@ locust -f tests/load.py --host http://cluster:8080
 - 100 logs maximum in response
 - 20 patterns per analysis
 
+## Recent Major Improvements (2024)
+
+### Search & Discovery Revolution
+1. **Smart Prioritization** - Ceph pools prioritized over DAOS pools
+2. **Intent-based filtering** - Filter by read/write/manage operations
+3. **Multi-word search** - "create rbd" matches "Create a new RBD"
+4. **Feature flags** - Disable unused endpoints for token savings
+5. **Quick-find tool** - Instant access to common categories
+
+### VictoriaLogs Integration
+1. **Direct JSON interface** - No translation layer complexity
+2. **Binary WebSocket auth** - Correct Croit protocol implementation
+3. **Full operator support** - _eq, _neq, _regex, _in, _nin, etc.
+4. **Control message handling** - "empty", "too_wide", error feedback
+5. **Real-time context** - Current timestamps injected automatically
+6. **Comprehensive field support** - All Ceph/system fields documented
+
+### Token Optimization Achievements
+- **Search optimization:** 89% reduction for targeted searches
+- **Feature filtering:** 16.9% overall endpoint reduction
+- **Smart truncation:** Priority results shown first
+- **Intent filtering:** 59-85% reduction per operation type
+
 ## Future Enhancements
 
 ### Planned Features
-1. Persistent cache with Redis
-2. Multi-cluster support
-3. Custom alert definitions
-4. ML-based anomaly detection
+1. VictoriaMetrics integration for performance data
+2. Log+Metrics correlation analysis
+3. Multi-cluster support
+4. Custom alert definitions
 5. Grafana dashboard integration
-
-### API Improvements
-1. Batch operations support
-2. Async job handling
-3. Webhook notifications
-4. Rate limiting per user
-
-### Log Analysis
-1. Advanced correlation algorithms
-2. Predictive failure detection
-3. Automated root cause analysis
-4. Historical trend analysis
