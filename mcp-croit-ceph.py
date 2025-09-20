@@ -1754,7 +1754,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         if query_params:
             kwargs["params"] = query_params
 
-        if body and method in ["post", "put", "patch"]:
+        if body and method in ["post", "put", "patch", "delete"]:
             headers["Content-Type"] = "application/json"
             kwargs["json"] = body
 
