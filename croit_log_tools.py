@@ -279,9 +279,11 @@ class CroitLogSearchClient:
         # Execute query
         try:
             logs = await self._execute_websocket_query(request)
+            logger.debug(f"WebSocket query successful: {len(logs)} logs returned")
         except Exception as e:
             logger.error(f"WebSocket failed: {e}, falling back to HTTP")
             logs = await self._execute_http_query(request)
+            logger.debug(f"HTTP fallback completed: {len(logs)} logs returned")
 
         # Analyze results
         patterns = self._analyze_patterns(logs) if logs else []
@@ -362,12 +364,28 @@ class CroitLogSearchClient:
                     'query': json.dumps(request)
                 }
 
+                logger.debug(f"HTTP GET {url} with params: {params}")
+                logger.debug(f"HTTP headers: {headers}")
+
                 async with session.get(url, params=params, headers=headers) as response:
+                    response_text = await response.text()
+                    logger.debug(f"HTTP response status: {response.status}")
+                    logger.debug(f"HTTP response headers: {dict(response.headers)}")
+                    logger.debug(f"HTTP response body (first 500 chars): {response_text[:500]}")
+
                     if response.status == 200:
-                        data = await response.json()
-                        logs = data.get('logs', [])
+                        try:
+                            data = json.loads(response_text)
+                            logs = data.get('logs', [])
+                            logger.debug(f"Successfully parsed JSON: {len(logs)} logs found")
+                            if not logs:
+                                logger.warning(f"HTTP response had no logs. Full response: {data}")
+                        except json.JSONDecodeError as e:
+                            logger.error(f"Failed to parse JSON response: {e}")
+                            logger.error(f"Raw response: {response_text}")
                     else:
                         logger.error(f"HTTP query failed with status {response.status}")
+                        logger.error(f"Error response body: {response_text}")
 
         except Exception as e:
             logger.error(f"HTTP query failed: {e}")
@@ -467,51 +485,168 @@ class CroitLogSearchClient:
 
         return insights
 
+async def _extract_logs_from_zip(zip_data: bytes) -> List[Dict]:
+    """Extract log entries from ZIP file"""
+    import zipfile
+    import io
+    import json
+
+    logs = []
+
+    try:
+        with zipfile.ZipFile(io.BytesIO(zip_data)) as zf:
+            for filename in zf.namelist():
+                logger.debug(f"Processing ZIP file: {filename}")
+
+                with zf.open(filename) as file:
+                    content = file.read().decode('utf-8')
+                    lines = content.strip().split('\n')
+
+                    for line_num, line in enumerate(lines):
+                        if line.strip():
+                            try:
+                                log_entry = json.loads(line)
+                                logs.append(log_entry)
+                            except json.JSONDecodeError as e:
+                                logger.warning(f"Failed to parse log line {line_num}: {e}")
+                                # Add as raw text if JSON parsing fails
+                                logs.append({
+                                    "raw_message": line,
+                                    "parse_error": str(e),
+                                    "line_number": line_num
+                                })
+
+    except Exception as e:
+        logger.error(f"Failed to extract logs from ZIP: {e}")
+
+    return logs
+
+async def _execute_croit_http_export(host: str, port: int, api_token: str, use_ssl: bool, query: Dict) -> Dict:
+    """Execute Croit log query via HTTP /api/logs/export endpoint"""
+    import aiohttp
+
+    # Build HTTP URL
+    http_protocol = "https" if use_ssl else "http"
+    url = f"{http_protocol}://{host}:{port}/api/logs/export"
+
+    headers = {
+        'Authorization': f'Bearer {api_token}',
+        'Content-Type': 'application/json'
+    }
+
+    params = {
+        'format': 'RAW',  # Use RAW format as discovered
+        'query': json.dumps(query)
+    }
+
+    logger.debug(f"HTTP GET {url}")
+    logger.debug(f"Params: {params}")
+    logger.debug(f"Headers: {headers}")
+
+    try:
+        async with aiohttp.ClientSession() as session:
+            async with session.get(url, params=params, headers=headers) as response:
+                logger.debug(f"HTTP response status: {response.status}")
+                logger.debug(f"HTTP response headers: {dict(response.headers)}")
+
+                if response.status == 200:
+                    response_json = await response.json()
+                    logger.debug(f"HTTP response JSON: {response_json}")
+
+                    # The response contains a download URL to a ZIP file
+                    download_url = response_json.get("url")
+                    if download_url:
+                        logger.debug(f"Downloading logs from: {download_url}")
+
+                        # Download and extract the ZIP file
+                        async with session.get(download_url, headers={'Authorization': f'Bearer {api_token}'}) as zip_response:
+                            if zip_response.status == 200:
+                                zip_data = await zip_response.read()
+                                logger.debug(f"Downloaded ZIP file: {len(zip_data)} bytes")
+
+                                # Extract logs from ZIP
+                                logs = await _extract_logs_from_zip(zip_data)
+                                logger.debug(f"Extracted {len(logs)} log entries from ZIP")
+
+                                return {
+                                    "logs": logs,
+                                    "control_messages": [{"type": "success", "message": f"Downloaded {len(logs)} logs"}],
+                                    "download_info": response_json
+                                }
+                            else:
+                                logger.error(f"Failed to download logs: {zip_response.status}")
+                                return {"logs": [], "control_messages": [{"type": "error", "message": f"Download failed: {zip_response.status}"}]}
+                    else:
+                        logger.error("No download URL in response")
+                        return {"logs": [], "control_messages": [{"type": "error", "message": "No download URL"}]}
+                else:
+                    error_text = await response.text()
+                    logger.error(f"HTTP query failed: {response.status} - {error_text}")
+                    return {"logs": [], "control_messages": [{"type": "error", "message": f"HTTP {response.status}: {error_text}"}]}
+
+    except Exception as e:
+        logger.error(f"HTTP query exception: {e}")
+        return {"logs": [], "control_messages": [{"type": "error", "message": str(e)}]}
+
 async def _execute_croit_websocket(host: str, port: int, api_token: str, use_ssl: bool, query: Dict) -> List[Dict]:
     """Execute direct Croit WebSocket query with VictoriaLogs JSON format"""
     import json
     import asyncio
     import websockets
 
-    # Build WebSocket URL
+    # Build WebSocket URL with token authentication
     ws_protocol = "wss" if use_ssl else "ws"
-    ws_url = f"{ws_protocol}://{host}:{port}/api/logs"
+    if api_token:
+        ws_url = f"{ws_protocol}://{host}:{port}/api/logs?token={api_token}"
+        logger.debug(f"Using query param authentication")
+    else:
+        ws_url = f"{ws_protocol}://{host}:{port}/api/logs"
+        logger.warning("No API token provided for WebSocket authentication")
 
     logs = []
     control_messages = []
+
+    logger.debug(f"Attempting WebSocket connection to: {ws_url}")
 
     try:
         async with websockets.connect(
             ws_url,
             ping_interval=20
         ) as websocket:
-            # CRITICAL: Send auth token as binary data (first message)
-            if api_token:
-                await websocket.send(api_token.encode('utf-8'))
+            logger.debug(f"WebSocket connection established successfully")
 
-            # Send Croit JSON query
-            await websocket.send(json.dumps(query))
+            # Send Croit JSON query directly (auth via URL params)
+            query_json = json.dumps(query, indent=2)
+            logger.debug(f"Sending WebSocket query: {query_json}")
+            await websocket.send(query_json)
+            logger.debug("Query sent successfully")
 
-            # Collect log entries
+            # Collect responses with longer timeout for query param auth
             start_time = asyncio.get_event_loop().time()
-            while (asyncio.get_event_loop().time() - start_time) < 30:  # 30 second timeout
+            while (asyncio.get_event_loop().time() - start_time) < 45:  # Increased timeout
                 try:
                     response = await asyncio.wait_for(
                         websocket.recv(),
                         timeout=5.0
                     )
                     if response:
+                        logger.debug(f"WebSocket response: {response[:200]}...")
+
                         # Handle control messages
                         if response == "clear":
                             control_messages.append({"type": "clear", "message": "Log display cleared"})
+                            logger.debug("Received 'clear' control message")
                         elif response == "empty":
                             control_messages.append({"type": "empty", "message": "No logs found for current query"})
+                            logger.debug("Received 'empty' control message - no logs found")
                         elif response == "too_wide":
                             control_messages.append({"type": "too_wide", "message": "Query too broad (>1M logs), please add more filters"})
+                            logger.debug("Received 'too_wide' control message")
                         elif response.startswith("hits:"):
                             try:
                                 hits_data = json.loads(response[5:].strip()) if response[5:].strip() != "null" else None
                                 control_messages.append({"type": "hits", "data": hits_data})
+                                logger.debug(f"Received hits data: {hits_data}")
                             except json.JSONDecodeError:
                                 logger.warning(f"Failed to parse hits data: {response}")
                         elif response.startswith("error:"):
@@ -523,6 +658,7 @@ async def _execute_croit_websocket(host: str, port: int, api_token: str, use_ssl
                             try:
                                 log_entry = json.loads(response)
                                 logs.append(log_entry)
+                                logger.debug(f"Added log entry {len(logs)}: {log_entry.get('timestamp', 'no-timestamp')}")
                             except json.JSONDecodeError:
                                 logger.warning(f"Non-JSON response: {response[:100]}")
                 except asyncio.TimeoutError:
@@ -534,6 +670,7 @@ async def _execute_croit_websocket(host: str, port: int, api_token: str, use_ssl
         logger.error(f"WebSocket query failed: {e}")
         raise
 
+    logger.debug(f"WebSocket query completed: {len(logs)} logs, {len(control_messages)} control messages")
     return {
         "logs": logs,
         "control_messages": control_messages
@@ -570,23 +707,37 @@ async def handle_log_search(arguments: Dict, host: str, port: int = 8080) -> Dic
             end = int(time.time())
             start = end - (hours_back * 3600)
 
-        # Build Croit WebSocket query
+        # Build Croit WebSocket query - match working examples
+        query_where = where_clause.copy() if where_clause else {}
+
+        # Add _search to the where clause (always, even if empty string)
+        query_where["_search"] = search_text
+
         croit_query = {
             "type": "query",
             "start": start,
             "end": end,
             "query": {
-                "where": where_clause,
-                "_search": search_text,
+                "where": query_where,
                 "after": after,
                 "limit": limit
             }
         }
 
-        # Execute query via WebSocket
-        response = await _execute_croit_websocket(host, port, api_token, use_ssl, croit_query)
-        logs = response["logs"]
-        control_messages = response["control_messages"]
+        # Execute query via HTTP (not WebSocket!)
+        logger.debug(f"Executing HTTP query to {host}:{port}")
+        response = await _execute_croit_http_export(host, port, api_token, use_ssl, croit_query)
+        logs = response.get("logs", [])
+        control_messages = response.get("control_messages", [])
+
+        logger.debug(f"HTTP response summary: {len(logs)} logs, {len(control_messages)} control messages")
+        if control_messages:
+            logger.debug(f"Control messages received: {[msg.get('type', 'unknown') for msg in control_messages]}")
+        if not logs and control_messages:
+            logger.warning(f"No logs returned. Control messages: {control_messages}")
+
+        # Calculate actual hours searched from timestamp difference
+        actual_hours_searched = (end - start) / 3600.0
 
         return {
             "code": 200,
@@ -597,13 +748,16 @@ async def handle_log_search(arguments: Dict, host: str, port: int = 8080) -> Dic
                 "time_range": {
                     "start_timestamp": start,
                     "end_timestamp": end,
-                    "hours_searched": hours_back
+                    "hours_searched": actual_hours_searched
                 }
             },
             "debug": {
                 "croit_query": croit_query,
                 "where_clause": where_clause,
-                "time_range_human": f"{datetime.fromtimestamp(start)} to {datetime.fromtimestamp(end)}"
+                "time_range_human": f"{datetime.fromtimestamp(start)} to {datetime.fromtimestamp(end)}",
+                "timestamp_diff_seconds": end - start,
+                "calculated_hours": actual_hours_searched,
+                "input_hours_back": hours_back
             }
         }
 
@@ -701,6 +855,7 @@ AVAILABLE FILTER FIELDS:
 • _SYSTEMD_UNIT: systemd service unit (string) - e.g. "ceph-mon", "ceph-osd@12"
 • PRIORITY: log priority/severity (integer: 0=emerg, 1=alert, 2=crit, 3=err, 4=warning, 5=notice, 6=info, 7=debug)
 • CROIT_SERVER_ID: specific Ceph node ID (string/integer) - e.g. "1", "2", "3"
+• CROIT_SERVERID: alternative field name for server ID (string/integer) - same as CROIT_SERVER_ID
 • MESSAGE: log message content (string)
 • _TRANSPORT: log transport method (string) - e.g. "kernel", "syslog", "journal"
 • _HOSTNAME: server hostname (string) - e.g. "storage-node-01"
@@ -727,7 +882,7 @@ NUMERIC OPERATORS:
 
 LIST/ARRAY OPERATORS:
 • _in: value in list {"PRIORITY": {"_in": [0, 1, 2, 3]}}
-• _nin: value not in list {"CROIT_SERVER_ID": {"_nin": ["1", "2"]}}
+• _nin: value not in list {"CROIT_SERVERID": {"_nin": ["1", "2"]}}
 
 PATTERN OPERATORS:
 • _regex: regular expression match {"MESSAGE": {"_regex": "OSD\\.[0-9]+"}}
@@ -759,14 +914,14 @@ COMPLEX QUERY EXAMPLES:
 {"where": {"_and": [
   {"_SYSTEMD_UNIT": {"_contains": "ceph-mon"}},
   {"PRIORITY": {"_lte": 6}},
-  {"CROIT_SERVER_ID": {"_eq": "1"}}
+  {"CROIT_SERVERID": {"_eq": "1"}}
 ]}}
 
 2. Kernel logs on server 1:
 {"where": {"_and": [
   {"_TRANSPORT": {"_eq": "kernel"}},
   {"PRIORITY": {"_lte": 6}},
-  {"CROIT_SERVER_ID": {"_eq": "1"}}
+  {"CROIT_SERVERID": {"_eq": "1"}}
 ]}}
 
 3. Kernel logs with error search (note _search is outside where clause):
@@ -774,7 +929,7 @@ COMPLEX QUERY EXAMPLES:
   "where": {"_and": [
     {"_TRANSPORT": {"_eq": "kernel"}},
     {"PRIORITY": {"_lte": 6}},
-    {"CROIT_SERVER_ID": {"_eq": "1"}}
+    {"CROIT_SERVERID": {"_eq": "1"}}
   ]},
   "_search": "error"
 }
@@ -788,7 +943,7 @@ COMPLEX QUERY EXAMPLES:
 5. Critical errors on specific server:
 {"where": {"_and": [
   {"PRIORITY": {"_lte": 3}},
-  {"CROIT_SERVER_ID": {"_eq": "1"}}
+  {"CROIT_SERVERID": {"_eq": "1"}}
 ]}}
 
 3. Multiple priority levels (errors + warnings):
@@ -797,7 +952,7 @@ COMPLEX QUERY EXAMPLES:
 4. Exclude specific servers from search:
 {"where": {"_and": [
   {"_SYSTEMD_UNIT": {"_contains": "ceph-osd"}},
-  {"CROIT_SERVER_ID": {"_not_in": ["1", "2", "3"]}}
+  {"CROIT_SERVERID": {"_not_in": ["1", "2", "3"]}}
 ]}}
 
 5. Info and above (exclude debug):

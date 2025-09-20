@@ -103,14 +103,23 @@ Retry strategy: manual_retry, exponential_backoff
 
 ## Installation
 
+⚠️ **IMPORTANT**: This project requires a virtual environment due to system-managed Python environments.
+
 ```bash
 # Clone the repository
 git clone https://github.com/croit/mcp-croit-ceph.git
 cd mcp-croit-ceph
 
-# Install dependencies
+# Create and activate virtual environment (REQUIRED)
+python3 -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or: venv\Scripts\activate  # Windows
+
+# Install dependencies in virtual environment
 pip install -r requirements.txt
 ```
+
+**Note**: Always activate the virtual environment (`source venv/bin/activate`) before running any Python commands or tests.
 
 ## Configuration
 
@@ -135,6 +144,9 @@ Or use a config file at `/config/config.json`:
 ### Basic Usage (Hybrid Mode)
 
 ```bash
+# Activate virtual environment first (REQUIRED)
+source venv/bin/activate
+
 # Default hybrid mode with permission checking
 python mcp-croit-ceph.py
 ```
@@ -142,6 +154,9 @@ python mcp-croit-ceph.py
 ### Advanced Options
 
 ```bash
+# Activate virtual environment first (REQUIRED)
+source venv/bin/activate
+
 # Use local OpenAPI spec file
 python mcp-croit-ceph.py --openapi-file openapi.json
 
@@ -316,9 +331,17 @@ services:
 
 ## Development
 
+⚠️ **Remember**: Always activate the virtual environment before development work:
+```bash
+source venv/bin/activate
+```
+
 ### Testing Tool Count
 
 ```bash
+# Activate virtual environment first
+source venv/bin/activate
+
 # Check how many tools will be generated in each mode
 for mode in hybrid base_only categories_only; do
   echo "$mode: $(python mcp-croit-ceph.py --mode $mode --openapi-file openapi.json --no-permission-check 2>&1 | grep -o 'Generated [0-9]* tools')"
@@ -328,6 +351,9 @@ done
 ### Debug Logging
 
 ```bash
+# Activate virtual environment first
+source venv/bin/activate
+
 # Enable debug logging
 export LOG_LEVEL=DEBUG
 python mcp-croit-ceph.py
@@ -336,11 +362,27 @@ python mcp-croit-ceph.py
 ### Testing with Local OpenAPI Spec
 
 ```bash
+# Activate virtual environment first
+source venv/bin/activate
+
 # Use the test script
 ./test-local.sh
 
 # Or manually test different modes
 python mcp-croit-ceph.py --mode hybrid --openapi-file openapi.json --no-permission-check
+```
+
+### Running Tests
+
+```bash
+# Activate virtual environment first
+source venv/bin/activate
+
+# Run timestamp fix test
+python test_timestamp_fix.py
+
+# Run other tests (ensure dependencies are installed in venv)
+python test_actual_mcp.py
 ```
 
 ## License

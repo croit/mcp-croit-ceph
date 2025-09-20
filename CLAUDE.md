@@ -300,3 +300,45 @@ Total API: 580 endpoints
 + specialty disabled: 489 endpoints (15.7% reduction)
 + all flags: 482 endpoints (16.9% reduction)
 ```
+
+## Development & Testing
+
+⚠️ **CRITICAL**: This project requires a virtual environment due to system-managed Python.
+
+### Initial Setup
+```bash
+# Create and activate virtual environment (REQUIRED)
+python3 -m venv venv
+source venv/bin/activate
+
+# Install dependencies
+pip install -r requirements.txt
+pip install aiohttp websockets  # For log search functionality
+```
+
+### Testing Commands
+```bash
+# Always activate virtual environment first
+source venv/bin/activate
+
+# Test timestamp calculation fix
+python test_timestamp_fix.py
+
+# Test MCP functionality
+CROIT_API_TOKEN="your-token" python test_actual_mcp.py
+
+# Run basic MCP server test
+python mcp-croit-ceph.py --openapi-file openapi.json --no-permission-check
+```
+
+### Common Development Patterns
+```bash
+# Start development session
+source venv/bin/activate
+export LOG_LEVEL=DEBUG
+export CROIT_API_TOKEN="your-token"
+
+# Run tests
+python test_timestamp_fix.py
+python test_actual_mcp.py
+```
