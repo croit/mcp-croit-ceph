@@ -66,6 +66,15 @@ class LogSearchIntentParser:
         """Parse natural language search intent"""
         intent = search_intent.lower()
 
+        # Detect Ceph service references and translate them
+        ceph_services = CephServiceTranslator.detect_ceph_services_in_text(search_intent)
+        translated_services = []
+        for service in ceph_services:
+            translated = CephServiceTranslator.translate_service_name(service)
+            translated_services.append(translated)
+            # Replace in intent for better pattern detection
+            intent = intent.replace(service.lower(), translated.lower())
+
         # Detect patterns
         detected_patterns = []
         for pattern_name, pattern_def in self.PATTERNS.items():
@@ -76,6 +85,9 @@ class LogSearchIntentParser:
         services = set()
         levels = set()
         keywords = set()
+
+        # Add translated Ceph services
+        services.update(translated_services)
 
         for pattern_name in detected_patterns:
             pattern = self.PATTERNS[pattern_name]
@@ -877,6 +889,72 @@ class CroitLogSearchClient:
         return insights
 
 
+class CephServiceTranslator:
+    """Translate Ceph service names to systemd service names"""
+
+    @staticmethod
+    def translate_service_name(service_name: str) -> str:
+        """Translate Ceph service names to systemd service names
+
+        Examples:
+        - osd.12 -> ceph-osd@12.service
+        - mon.hostname -> ceph-mon@hostname.service
+        - mgr.node1 -> ceph-mgr@node1.service
+        """
+        import re
+
+        # Handle Ceph OSD services: osd.12 -> ceph-osd@12.service
+        osd_match = re.match(r"^osd\.(\d+)$", service_name)
+        if osd_match:
+            osd_id = osd_match.group(1)
+            return f"ceph-osd@{osd_id}.service"
+
+        # Handle Ceph MON services: mon.hostname -> ceph-mon@hostname.service
+        mon_match = re.match(r"^mon\.(.+)$", service_name)
+        if mon_match:
+            mon_id = mon_match.group(1)
+            return f"ceph-mon@{mon_id}.service"
+
+        # Handle Ceph MGR services: mgr.hostname -> ceph-mgr@hostname.service
+        mgr_match = re.match(r"^mgr\.(.+)$", service_name)
+        if mgr_match:
+            mgr_id = mgr_match.group(1)
+            return f"ceph-mgr@{mgr_id}.service"
+
+        # Handle Ceph MDS services: mds.hostname -> ceph-mds@hostname.service
+        mds_match = re.match(r"^mds\.(.+)$", service_name)
+        if mds_match:
+            mds_id = mds_match.group(1)
+            return f"ceph-mds@{mds_id}.service"
+
+        # Handle Ceph RGW services: rgw.hostname -> ceph-radosgw@hostname.service
+        rgw_match = re.match(r"^rgw\.(.+)$", service_name)
+        if rgw_match:
+            rgw_id = rgw_match.group(1)
+            return f"ceph-radosgw@{rgw_id}.service"
+
+        # If no translation needed, return as-is (might already be systemd format)
+        return service_name
+
+    @staticmethod
+    def detect_ceph_services_in_text(text: str) -> List[str]:
+        """Detect Ceph service references in natural language text"""
+        import re
+
+        services = []
+
+        # Look for patterns like "osd.12", "mon.host1", etc.
+        ceph_service_pattern = r'\b(osd|mon|mgr|mds|rgw)\.[\w\-\.]+\b'
+        matches = re.findall(ceph_service_pattern, text, re.IGNORECASE)
+
+        for match in matches:
+            full_match = re.search(rf'\b{re.escape(match)}\.[\w\-\.]+\b', text, re.IGNORECASE)
+            if full_match:
+                services.append(full_match.group())
+
+        return services
+
+
 class CephDebugTemplates:
     """Pre-built templates for common Ceph debugging scenarios"""
 
@@ -1042,6 +1120,63 @@ class CephDebugTemplates:
                 },
                 "hours_back": 6,
                 "limit": 200,
+            },
+            "specific_osd_analysis": {
+                "name": "Specific OSD Analysis (Ceph-friendly syntax)",
+                "description": "Analyze specific OSD using natural Ceph syntax (e.g., 'osd.12')",
+                "query": {
+                    "where": {
+                        "_and": [
+                            {"_SYSTEMD_UNIT": {"_contains": "ceph-osd@12"}},
+                            {"PRIORITY": {"_lte": 5}},
+                        ]
+                    }
+                },
+                "hours_back": 48,
+                "limit": 150,
+                "user_friendly_example": "Search for 'osd.12 issues' - automatically translates to systemd service name",
+            },
+            "mon_specific_debugging": {
+                "name": "Monitor Service Debugging (Ceph-friendly syntax)",
+                "description": "Debug specific monitor using natural Ceph syntax (e.g., 'mon.node1')",
+                "query": {
+                    "where": {
+                        "_and": [
+                            {"_SYSTEMD_UNIT": {"_contains": "ceph-mon@node1"}},
+                            {"PRIORITY": {"_lte": 4}},
+                            {"MESSAGE": {"_regex": "(error|warn|fail|election|quorum)"}},
+                        ]
+                    }
+                },
+                "hours_back": 24,
+                "limit": 100,
+                "user_friendly_example": "Search for 'mon.node1 election problems' - auto-translates service names",
+            },
+            "ceph_service_translation_showcase": {
+                "name": "Ceph Service Translation Examples",
+                "description": "Showcase automatic translation of Ceph service names to systemd format",
+                "examples": {
+                    "osd.12": "Translates to ceph-osd@12.service",
+                    "mon.hostname": "Translates to ceph-mon@hostname.service",
+                    "mgr.node1": "Translates to ceph-mgr@node1.service",
+                    "mds.fs-node": "Translates to ceph-mds@fs-node.service",
+                    "rgw.gateway": "Translates to ceph-radosgw@gateway.service",
+                },
+                "usage_examples": [
+                    "Search: 'osd.5 slow requests' → Automatically finds ceph-osd@5.service logs",
+                    "Search: 'mon.ceph01 election' → Automatically finds ceph-mon@ceph01.service logs",
+                    "Search: 'mgr.primary errors' → Automatically finds ceph-mgr@primary.service logs",
+                ],
+                "query": {
+                    "where": {
+                        "_and": [
+                            {"_SYSTEMD_UNIT": {"_regex": "ceph-(osd|mon|mgr|mds|radosgw)@.*"}},
+                            {"PRIORITY": {"_lte": 6}},
+                        ]
+                    }
+                },
+                "hours_back": 12,
+                "limit": 100,
             },
         }
 
