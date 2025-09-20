@@ -67,7 +67,9 @@ class LogSearchIntentParser:
         intent = search_intent.lower()
 
         # Detect Ceph service references and translate them
-        ceph_services = CephServiceTranslator.detect_ceph_services_in_text(search_intent)
+        ceph_services = CephServiceTranslator.detect_ceph_services_in_text(
+            search_intent
+        )
         translated_services = []
         for service in ceph_services:
             translated = CephServiceTranslator.translate_service_name(service)
@@ -944,11 +946,13 @@ class CephServiceTranslator:
         services = []
 
         # Look for patterns like "osd.12", "mon.host1", etc.
-        ceph_service_pattern = r'\b(osd|mon|mgr|mds|rgw)\.[\w\-\.]+\b'
+        ceph_service_pattern = r"\b(osd|mon|mgr|mds|rgw)\.[\w\-\.]+\b"
         matches = re.findall(ceph_service_pattern, text, re.IGNORECASE)
 
         for match in matches:
-            full_match = re.search(rf'\b{re.escape(match)}\.[\w\-\.]+\b', text, re.IGNORECASE)
+            full_match = re.search(
+                rf"\b{re.escape(match)}\.[\w\-\.]+\b", text, re.IGNORECASE
+            )
             if full_match:
                 services.append(full_match.group())
 
@@ -1144,7 +1148,11 @@ class CephDebugTemplates:
                         "_and": [
                             {"_SYSTEMD_UNIT": {"_contains": "ceph-mon@node1"}},
                             {"PRIORITY": {"_lte": 4}},
-                            {"MESSAGE": {"_regex": "(error|warn|fail|election|quorum)"}},
+                            {
+                                "MESSAGE": {
+                                    "_regex": "(error|warn|fail|election|quorum)"
+                                }
+                            },
                         ]
                     }
                 },
@@ -1170,7 +1178,11 @@ class CephDebugTemplates:
                 "query": {
                     "where": {
                         "_and": [
-                            {"_SYSTEMD_UNIT": {"_regex": "ceph-(osd|mon|mgr|mds|radosgw)@.*"}},
+                            {
+                                "_SYSTEMD_UNIT": {
+                                    "_regex": "ceph-(osd|mon|mgr|mds|radosgw)@.*"
+                                }
+                            },
                             {"PRIORITY": {"_lte": 6}},
                         ]
                     }

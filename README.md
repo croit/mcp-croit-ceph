@@ -5,7 +5,7 @@ An MCP (Model Context Protocol) server for interacting with Croit Ceph clusters 
 ## Current Status
 
 - **580** total API endpoints
-- **132** endpoints with x-llm-hints (22.8% coverage)
+- **575** endpoints with x-llm-hints (99.1% coverage)
 - **100%** endpoints have summaries
 - **13** tools in hybrid mode (97% reduction)
 - **Full support** for all x-llm-hints fields
@@ -60,7 +60,7 @@ This dramatic reduction improves:
 
 - **Automatic API Discovery**: Fetches OpenAPI spec from your Croit cluster
 - **Permission-Based Filtering**: Role-based tool filtering (ADMIN vs VIEWER)
-- **Full x-llm-hints Support**: 132+ endpoints with AI optimization hints
+- **Full x-llm-hints Support**: 575+ endpoints with AI optimization hints
 - **Local OpenAPI Support**: Use a local OpenAPI spec file for testing/development
 - **Schema Resolution**: Handles `$ref` references automatically
 

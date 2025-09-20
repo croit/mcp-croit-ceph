@@ -456,6 +456,55 @@ CROIT_API_TOKEN="your-token" python test_actual_mcp.py
 python mcp-croit-ceph.py --openapi-file openapi.json --no-permission-check
 ```
 
+## ⚠️ CRITICAL: Run Black Formatter Before EVERY Commit!
+
+**GitLab CI WILL FAIL if Python code is not formatted with black!**
+
+### Pre-Commit Checklist
+```bash
+# ALWAYS run before committing:
+source venv/bin/activate
+black --check .  # Check for issues
+black .          # Fix formatting
+```
+
+**Why this is critical:**
+- The GitLab CI pipeline runs `black --check` in the lint stage
+- Unformatted code causes pipeline failures
+- This blocks merging and deployment
+
+### Quick Fix for Lint Failures
+```bash
+# If you forgot to run black and CI failed:
+source venv/bin/activate
+black croit_log_tools.py mcp-croit-ceph.py token_optimizer.py
+git add -u
+git commit -m "fix: Apply black formatting"
+git push
+```
+
+## ⚠️ IMPORTANT: openapi.json is Auto-Generated
+
+**DO NOT EDIT openapi.json DIRECTLY** - The file is automatically generated from the Croit API backend!
+
+### OpenAPI Spec Updates
+The `openapi.json` file is fetched from the Croit cluster and contains the API specification with x-llm-hints. To update x-llm-hints, changes must be made in the Croit API backend source code, not in this MCP project.
+
+Current status (as of v0.4.0):
+- **580** total API endpoints
+- **575** endpoints with x-llm-hints (99.1% coverage)
+- **5** endpoints missing x-llm-hints
+
+### Missing/Inadequate x-llm-hints for Critical OSD Operations
+
+**Problem:** LLMs cannot find correct OSD removal workflow without specific hints.
+
+**Critical Issues Found:**
+1. `DELETE /servers/{id}/disks/{diskId}` - Has generic "disk record removal" hints instead of OSD-specific guidance
+2. `DELETE /disks/wipe` - Missing "400 if active OSD" failure mode and workflow guidance
+
+These hints need to be updated in the source (likely the Croit API backend that generates openapi.json) to provide proper OSD operation guidance for LLMs.
+
 ### Common Development Patterns
 ```bash
 # Start development session

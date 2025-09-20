@@ -25153,7 +25153,8 @@
     },
     "/disks/wipe" : {
       "delete" : {
-        "summary" : "Wipe disks on servers.",
+        "summary" : "Securely wipe disks",
+        "description" : "\n\t\t\tSecurely wipes one or more disks by completely erasing their contents, optionally destroying\n\t\t\tassociated OSDs in the Ceph cluster map. This operation permanently destroys all data on the\n\t\t\tselected disks and cannot be undone.\n\n\t\t\t**⚠️ Critical**: This operation permanently destroys all data on the specified disks.\n\t\t\tEnsure you have backups and that data is properly replicated before proceeding.\n\n\t\t\t**Workflow for OSD disks**:\n\t\t\t1. Use `DELETE /servers/{id}/disks/{diskId}` to properly remove OSDs first\n\t\t\t2. Then use this endpoint to wipe the disks for reuse\n\t\t\t3. Optionally recreate OSDs with `POST /disks/create-osds`\n\n\t\t\t**Use this endpoint for**:\n\t\t\t- Preparing disks for reuse after OSD removal\n\t\t\t- Securely erasing disks before decommissioning hardware\n\t\t\t- Cleaning drives prior to repurposing\n\t\t\t- Destroying data for security compliance\n\n\t\t\t**Safety features**:\n\t\t\t- Requires serial number confirmation to prevent accidental wipes\n\t\t\t- Validates disk ownership and prevents wiping boot media\n\t\t\t- Checks for DAOS usage and active services\n\t\t\t- Returns detailed task logs for monitoring progress\n\n\t\t\t**Prerequisites**: For OSD disks, ensure OSDs are properly removed from cluster first.\n\t\t",
         "operationId" : "DiskResource_wipeDisksRequest",
         "tags" : [ "disks", "osds" ],
         "requestBody" : {
@@ -25182,6 +25183,10 @@
           "purpose" : "Securely wipe one or more disks, optionally destroying associated OSDs in the cluster map.",
           "usage" : [ "Prepare disks for reuse after removing OSDs or other data.", "Clean drives prior to decommissioning hardware from the cluster." ],
           "response_shape" : "ManagedTask",
+          "workflow_guidance" : {
+            "pre_check" : "For OSD disks: Use DELETE /servers/{id}/disks/{diskId} to properly remove OSD before wiping",
+            "post_action" : "1. Remove OSD → 2. Wipe disk → 3. Recreate if needed"
+          },
           "request_parameters" : [ {
             "name" : "disks[].server",
             "in" : "body",
@@ -25207,10 +25212,16 @@
             "required" : false,
             "example" : "false"
           } ],
-          "failure_modes" : [ "400 if the request is empty, contains duplicates, or serial numbers do not match", "400 if any disk is boot media or in use by DAOS", "200 ManagedTask(status=FAILED) if wiping fails on a subset of disks" ],
+          "failure_modes" : [ "400 if the request is empty, contains duplicates, or serial numbers do not match", "400 if any disk is boot media or in use by DAOS", "400 if disk contains active OSD (use DELETE /servers/{id}/disks/{diskId} first)", "500 if disk is currently in use by running services", "200 ManagedTask(status=FAILED) if wiping fails on a subset of disks" ],
           "error_handling" : [ {
             "code" : "400",
             "action" : "Validate disk ownership, serial numbers, and DAOS usage before retrying."
+          }, {
+            "code" : "400",
+            "action" : "For OSD disks: Remove OSD first using DELETE /servers/{id}/disks/{diskId} then retry wipe"
+          }, {
+            "code" : "500",
+            "action" : "Check if disk is mounted or has active processes before wiping"
           }, {
             "code" : "200",
             "action" : "Inspect task logs to identify disks that failed and rerun the wipe for those drives only."
@@ -25224,14 +25235,19 @@
           "related_endpoints" : [ "/servers/{id}/disks", "/disks/create-osds", "/tasks" ],
           "postprocessing_hint" : "Monitor the ManagedTask until completion and run hardware detection to confirm disks are blank.",
           "idempotent" : true,
-          "requires_confirmation" : false
+          "requires_confirmation" : false,
+          "workflow_dependencies" : {
+            "prerequisite" : "For OSD disks: Use DELETE /servers/{id}/disks/{diskId} to properly remove OSD before wiping",
+            "order" : "1. Remove OSD → 2. Wipe disk → 3. Recreate if needed"
+          }
         },
         "x-required-permissions" : [ "admin" ]
       }
     },
     "/disks/{diskId}" : {
       "delete" : {
-        "summary" : "Delete disk",
+        "summary" : "Remove disk from inventory",
+        "description" : "\n\t\t\tRemoves a disk entry from the croit inventory database without performing any cluster operations.\n\t\t\tThis is a lightweight inventory cleanup operation that only affects the database record.\n\n\t\t\t**⚠️ Important**: This endpoint does NOT interact with Ceph or perform OSD operations.\n\t\t\tIt only removes the disk entry from croit's inventory database.\n\n\t\t\t**Use this endpoint when**:\n\t\t\t- Cleaning up stale inventory entries after hardware removal\n\t\t\t- Removing disk records after physical decommission\n\t\t\t- Correcting inventory after disk replacement\n\t\t\t- Database housekeeping tasks\n\n\t\t\t**Do NOT use this endpoint for**:\n\t\t\t- Removing active OSDs (use `DELETE /servers/{id}/disks/{diskId}` instead)\n\t\t\t- Any operation requiring cluster coordination\n\t\t\t- Live disk operations on running systems\n\n\t\t\t**Prerequisites**: Ensure the disk is not in active use by Ceph OSDs or DAOS before removal.\n\t\t\tFor OSD disks, use the server-specific endpoint to properly handle OSD lifecycle.\n\t\t",
         "operationId" : "DiskResource_deleteDiskWithoutServerId",
         "tags" : [ "disks", "osds" ],
         "parameters" : [ {
@@ -45863,7 +45879,8 @@
         "x-required-permissions" : [ "admin" ]
       },
       "delete" : {
-        "summary" : "Delete disk",
+        "summary" : "Remove OSD and disk from cluster",
+        "description" : "\n\t\t\tCompletely removes an OSD and its associated disk from the Ceph cluster in a single operation.\n\t\t\tThis endpoint handles the full OSD lifecycle including:\n\n\t\t\t• **Data Migration**: Automatically migrates data to other OSDs before removal\n\t\t\t• **Service Management**: Stops OSD service and removes from systemd\n\t\t\t• **Cluster Cleanup**: Removes OSD from CRUSH map and cluster configuration\n\t\t\t• **Storage Cleanup**: Cleans up DB/WAL partitions and associated storage\n\n\t\t\t**⚠️ Important**: This operation causes data redistribution across the cluster and permanently\n\t\t\tremoves the OSD. Ensure cluster has sufficient replicas before proceeding.\n\n\t\t\t**Use this endpoint when**:\n\t\t\t- Converting OSDs from separate DB/WAL to standard configuration\n\t\t\t- Permanently removing failed or unwanted OSDs\n\t\t\t- Decommissioning hardware from the cluster\n\n\t\t\t**Prerequisites**: Cluster must be in HEALTH_OK state with sufficient replicas for data safety.\n\t\t",
         "operationId" : "ServerResource_deleteDisk",
         "tags" : [ "servers" ],
         "parameters" : [ {
@@ -45892,9 +45909,13 @@
           }
         },
         "x-llm-hints" : {
-          "purpose" : "Remove a disk record from a server after hardware replacement or removal.",
-          "usage" : [ "Clear stale entries when a disk was taken out but the hardware scan has not run yet.", "Reset the inventory before reimporting a disk with a new role." ],
+          "purpose" : "Remove OSD and disk from cluster in single operation - handles OSD stop, data migration, and disk cleanup automatically",
+          "usage" : [ "Primary method for removing OSDs with DB/WAL configuration", "Use when converting OSDs from separate DB/WAL to standard configuration", "Call when permanently removing failed OSDs from cluster" ],
           "response_shape" : "void",
+          "workflow_guidance" : {
+            "pre_check" : "Cluster HEALTH_OK; Sufficient replicas for data safety; DB/WAL usage confirmed",
+            "post_action" : "OSD stopped and removed; Data redistributed automatically; Disk freed for reuse; DB/WAL partitions cleaned up"
+          },
           "path_parameters" : [ {
             "name" : "id",
             "in" : "path",
@@ -45922,10 +45943,14 @@
             "window_seconds" : 3600,
             "note" : "Disk inventory cleanup"
           },
-          "related_endpoints" : [ "/servers/{id}/disks", "/servers/{id}/disks/{diskId}/smart" ],
-          "postprocessing_hint" : "Run hardware re-detect or import to refresh disk listings after removal.",
+          "related_endpoints" : [ "/disks/create-osds", "/cluster/status", "/servers/{id}/disks" ],
+          "postprocessing_hint" : "After successful removal, disk appears with reduced partition count and can be reused for standard OSD creation without DB/WAL",
           "idempotent" : true,
-          "requires_confirmation" : false
+          "requires_confirmation" : true,
+          "confirmation_reason" : "Removing OSDs causes data redistribution and permanently removes the OSD from the cluster",
+          "ceph_integration" : {
+            "automatic_steps" : [ "ceph osd out {osd_id}", "systemctl stop ceph-osd@{osd_id}", "ceph osd purge {osd_id}", "Cleanup DB/WAL partitions", "Remove from CRUSH map" ]
+          }
         },
         "x-required-permissions" : [ "admin" ]
       }

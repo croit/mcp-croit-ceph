@@ -821,6 +821,8 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
         hint_poll_intervals = []
         hint_cache_hints = []
         hint_related_endpoints = []
+        hint_ceph_integration = {}
+        hint_workflow_dependencies = {}
         has_confirmations = False
         has_token_hints = False
 
@@ -884,6 +886,18 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
                 # Collect related endpoints
                 if hints.get("related_endpoints"):
                     hint_related_endpoints.extend(hints["related_endpoints"][:3])
+
+                # Collect ceph_integration (NEW)
+                if hints.get("ceph_integration"):
+                    ceph_int = hints["ceph_integration"]
+                    if isinstance(ceph_int, dict):
+                        hint_ceph_integration.update(ceph_int)
+
+                # Collect workflow_dependencies (NEW)
+                if hints.get("workflow_dependencies"):
+                    workflow_deps = hints["workflow_dependencies"]
+                    if isinstance(workflow_deps, dict):
+                        hint_workflow_dependencies.update(workflow_deps)
 
                 if hints.get("requires_confirmation"):
                     has_confirmations = True
@@ -949,6 +963,23 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
         if hint_related_endpoints:
             unique_related = list(set(hint_related_endpoints))[:3]
             description += f"\n\nRelated endpoints: {', '.join(unique_related)}"
+
+        # Add Ceph integration steps (NEW)
+        if hint_ceph_integration:
+            if hint_ceph_integration.get("automatic_steps"):
+                steps = hint_ceph_integration["automatic_steps"]
+                description += "\n\nCeph Integration (automatic steps):"
+                for step in steps[:5]:  # Limit to 5 steps
+                    description += f"\n• {step}"
+
+        # Add workflow dependencies (NEW)
+        if hint_workflow_dependencies:
+            if hint_workflow_dependencies.get("prerequisite"):
+                description += f"\n\nPrerequisite: {hint_workflow_dependencies['prerequisite'][:200]}"
+            if hint_workflow_dependencies.get("order"):
+                description += (
+                    f"\nWorkflow order: {hint_workflow_dependencies['order'][:150]}"
+                )
 
         if hint_params:
             unique_params = list(set(hint_params))[:5]
