@@ -26,11 +26,8 @@ logger = logging.getLogger(__name__)
 
 # Import log search tools
 try:
-    from croit_log_tools import (
-        handle_log_search,
-        handle_log_check,
-        LOG_SEARCH_TOOLS
-    )
+    from croit_log_tools import handle_log_search, handle_log_check, LOG_SEARCH_TOOLS
+
     LOG_TOOLS_AVAILABLE = True
 except ImportError:
     logger.warning("croit_log_tools module not found, log search features disabled")
@@ -39,9 +36,12 @@ except ImportError:
 # Try to import token_optimizer, fall back gracefully if not available
 try:
     from token_optimizer import TokenOptimizer
+
     TOKEN_OPTIMIZER_AVAILABLE = True
 except ImportError:
-    logger.warning("token_optimizer module not found, filtering and optimization disabled")
+    logger.warning(
+        "token_optimizer module not found, filtering and optimization disabled"
+    )
     TOKEN_OPTIMIZER_AVAILABLE = False
 
     # Create a dummy TokenOptimizer class with no-op methods
@@ -61,12 +61,6 @@ except ImportError:
         @classmethod
         def apply_filters(cls, data, filters):
             return data
-
-
-
-
-
-
 
 
 class CroitCephServer:
@@ -102,7 +96,9 @@ class CroitCephServer:
 
         # Validate mode
         if mode not in ["hybrid", "base_only", "categories_only"]:
-            raise ValueError(f"Unsupported mode: {mode}. Use 'hybrid', 'base_only', or 'categories_only'")
+            raise ValueError(
+                f"Unsupported mode: {mode}. Use 'hybrid', 'base_only', or 'categories_only'"
+            )
 
         self.mode = mode
         self.max_category_tools = max_category_tools
@@ -164,7 +160,9 @@ Many endpoints offer pagination. When available, use it to refine the query."""
             return await self.handle_list_tools()
 
         @self.server.call_tool()
-        async def call_tool_handler(name: str, arguments: dict) -> list[types.TextContent]:
+        async def call_tool_handler(
+            name: str, arguments: dict
+        ) -> list[types.TextContent]:
             try:
                 # Call the appropriate handler based on stored mode
                 if self.mode == "hybrid":
@@ -203,7 +201,7 @@ Many endpoints offer pagination. When available, use it to refine the query."""
         """Load OpenAPI spec from a local file."""
         logger.info(f"Loading OpenAPI spec from local file: {self.openapi_file}")
         try:
-            with open(self.openapi_file, 'r') as f:
+            with open(self.openapi_file, "r") as f:
                 self.api_spec = json.load(f)
             logger.info(f"Successfully loaded OpenAPI spec from {self.openapi_file}")
         except FileNotFoundError:
@@ -337,8 +335,6 @@ Valid filter ops are:
         )
         self.resolved_references = True
 
-
-
     def _convert_openapi_schema_to_json_schema(self, openapi_schema: Dict) -> Dict:
         """
         Convert OpenAPI schema to JSON schema format.
@@ -358,7 +354,9 @@ Valid filter ops are:
 
         return schema
 
-    def _resolve_refs_in_schema(self, schema: Dict, depth: int = 0, seen_refs: set = None) -> Dict:
+    def _resolve_refs_in_schema(
+        self, schema: Dict, depth: int = 0, seen_refs: set = None
+    ) -> Dict:
         """
         Recursively resolve $ref references in a schema and add inline documentation.
         """
@@ -390,13 +388,17 @@ Valid filter ops are:
         if "properties" in schema:
             resolved_props = {}
             for prop_name, prop_schema in schema["properties"].items():
-                resolved_props[prop_name] = self._resolve_refs_in_schema(prop_schema, depth + 1, seen_refs.copy())
+                resolved_props[prop_name] = self._resolve_refs_in_schema(
+                    prop_schema, depth + 1, seen_refs.copy()
+                )
             schema = schema.copy()
             schema["properties"] = resolved_props
 
         if "items" in schema:
             schema = schema.copy()
-            schema["items"] = self._resolve_refs_in_schema(schema["items"], depth + 1, seen_refs.copy())
+            schema["items"] = self._resolve_refs_in_schema(
+                schema["items"], depth + 1, seen_refs.copy()
+            )
 
         if "anyOf" in schema:
             schema = schema.copy()
@@ -463,23 +465,34 @@ Valid filter ops are:
             if tag == "daos" and not self.enable_daos:
                 continue
             # Skip specialty features if not enabled
-            if not self.enable_specialty_features and tag in ["rbd-mirror", "qos-settings", "ceph-keys"]:
+            if not self.enable_specialty_features and tag in [
+                "rbd-mirror",
+                "qos-settings",
+                "ceph-keys",
+            ]:
                 continue
             filtered_tag_counter[tag] = count
 
         # Sort categories by operation count and select top categories
         potential_categories = [
-            cat for cat, count in Counter(filtered_tag_counter).most_common(self.max_category_tools * 2)  # Get more initially
+            cat
+            for cat, count in Counter(filtered_tag_counter).most_common(
+                self.max_category_tools * 2
+            )  # Get more initially
             if count >= self.min_endpoints_per_category
         ]
 
         # Test permissions for each category if enabled
-        if getattr(self, 'check_permissions', True):
-            self.top_categories = self._filter_categories_by_permission(potential_categories)
+        if getattr(self, "check_permissions", True):
+            self.top_categories = self._filter_categories_by_permission(
+                potential_categories
+            )
         else:
-            self.top_categories = potential_categories[:self.max_category_tools]
+            self.top_categories = potential_categories[: self.max_category_tools]
 
-        logger.info(f"Found {len(tag_counter)} categories, selected {len(self.top_categories)} accessible: {self.top_categories}")
+        logger.info(
+            f"Found {len(tag_counter)} categories, selected {len(self.top_categories)} accessible: {self.top_categories}"
+        )
 
     def _get_user_roles(self) -> List[str]:
         """
@@ -495,19 +508,27 @@ Valid filter ops are:
                 "Accept": "application/json",
             }
 
-            resp = requests.get(token_info_url, headers=headers, verify=self.ssl, timeout=5)
+            resp = requests.get(
+                token_info_url, headers=headers, verify=self.ssl, timeout=5
+            )
 
             if resp.status_code == 200:
                 data = resp.json()
                 roles = data.get("roles", [])
                 logger.info(f"User roles detected: {roles}")
-                return roles if roles else ["VIEWER"]  # Default to VIEWER if empty (shouldn't happen)
+                return (
+                    roles if roles else ["VIEWER"]
+                )  # Default to VIEWER if empty (shouldn't happen)
             elif resp.status_code == 401:
                 logger.error("Invalid API token - authentication failed")
-                raise RuntimeError("Invalid API token. Please check your CROIT_API_TOKEN.")
+                raise RuntimeError(
+                    "Invalid API token. Please check your CROIT_API_TOKEN."
+                )
             else:
                 logger.error(f"Unexpected response from token-info: {resp.status_code}")
-                raise RuntimeError(f"Failed to verify API token: HTTP {resp.status_code}")
+                raise RuntimeError(
+                    f"Failed to verify API token: HTTP {resp.status_code}"
+                )
 
         except requests.exceptions.RequestException as e:
             logger.error(f"Failed to connect to Croit API: {e}")
@@ -527,17 +548,17 @@ Valid filter ops are:
 
         if has_admin:
             logger.info("User has ADMIN role - all categories accessible")
-            return categories[:self.max_category_tools]
+            return categories[: self.max_category_tools]
 
         # Categories that require ADMIN role for write operations
         admin_only_categories = {
-            'maintenance',  # System maintenance operations
-            'servers',      # Server management
-            'ipmi',         # IPMI/hardware control
-            'config',       # Configuration changes
-            'hooks',        # System hooks
-            'change-requests',  # Change management
-            'config-templates', # Configuration templates
+            "maintenance",  # System maintenance operations
+            "servers",  # Server management
+            "ipmi",  # IPMI/hardware control
+            "config",  # Configuration changes
+            "hooks",  # System hooks
+            "change-requests",  # Change management
+            "config-templates",  # Configuration templates
         }
 
         # For VIEWER/READ_ONLY users, filter out admin-only categories
@@ -591,33 +612,35 @@ Example usage:
 
 Priority categories: ceph-pools, rbds, osds, servers, services, cluster"""
 
-        self.mcp_tools.append(types.Tool(
-            name=self.list_endpoints_tool,
-            description=list_endpoints_desc,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "category": {
-                        "type": "string",
-                        "description": f"Filter by category/tag. Available: {', '.join(self.top_categories[:10])}"
+        self.mcp_tools.append(
+            types.Tool(
+                name=self.list_endpoints_tool,
+                description=list_endpoints_desc,
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "category": {
+                            "type": "string",
+                            "description": f"Filter by category/tag. Available: {', '.join(self.top_categories[:10])}",
+                        },
+                        "method": {
+                            "type": "string",
+                            "enum": ["get", "post", "put", "delete", "patch"],
+                            "description": "Filter by HTTP method",
+                        },
+                        "search": {
+                            "type": "string",
+                            "description": "Search term to filter endpoints by path or summary",
+                        },
+                        "intent": {
+                            "type": "string",
+                            "enum": ["read", "write", "manage", "all"],
+                            "description": "Intent-based filtering: read (GET), write (POST/PUT/PATCH), manage (DELETE), all (default)",
+                        },
                     },
-                    "method": {
-                        "type": "string",
-                        "enum": ["get", "post", "put", "delete", "patch"],
-                        "description": "Filter by HTTP method"
-                    },
-                    "search": {
-                        "type": "string",
-                        "description": "Search term to filter endpoints by path or summary"
-                    },
-                    "intent": {
-                        "type": "string",
-                        "enum": ["read", "write", "manage", "all"],
-                        "description": "Intent-based filtering: read (GET), write (POST/PUT/PATCH), manage (DELETE), all (default)"
-                    }
-                }
-            }
-        ))
+                },
+            )
+        )
 
         # Base tool: call_endpoint with enhanced description
         call_endpoint_desc = """Call any API endpoint directly.
@@ -638,59 +661,64 @@ The endpoint metadata from list_endpoints includes x-llm-hints with:
 • Parameter details
 • Request/response examples"""
 
-        self.mcp_tools.append(types.Tool(
-            name=self.call_endpoint_tool,
-            description=call_endpoint_desc,
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "path": {
-                        "type": "string",
-                        "description": "API endpoint path (e.g., /services/{id})"
-                    },
-                    "method": {
-                        "type": "string",
-                        "enum": ["get", "post", "put", "delete", "patch"],
-                        "description": "HTTP method"
-                    },
-                    "path_params": {
-                        "type": "object",
-                        "description": "Path parameters as key-value pairs"
-                    },
-                    "query_params": {
-                        "type": "object",
-                        "description": "Query parameters as key-value pairs"
-                    },
-                    "body": {
-                        "type": "object",
-                        "description": "Request body (for POST, PUT, PATCH)"
-                    }
-                },
-                "required": ["path", "method"]
-            }
-        ))
-
-        # Only add get_schema tool if references aren't resolved
-        if not self.resolved_references:
-            self.mcp_tools.append(types.Tool(
-                name=self.get_schema_tool,
-                description="Get schema definition for $ref references",
+        self.mcp_tools.append(
+            types.Tool(
+                name=self.call_endpoint_tool,
+                description=call_endpoint_desc,
                 inputSchema={
                     "type": "object",
                     "properties": {
-                        "reference": {
+                        "path": {
                             "type": "string",
-                            "description": "Schema reference (e.g., #/components/schemas/Service)"
-                        }
+                            "description": "API endpoint path (e.g., /services/{id})",
+                        },
+                        "method": {
+                            "type": "string",
+                            "enum": ["get", "post", "put", "delete", "patch"],
+                            "description": "HTTP method",
+                        },
+                        "path_params": {
+                            "type": "object",
+                            "description": "Path parameters as key-value pairs",
+                        },
+                        "query_params": {
+                            "type": "object",
+                            "description": "Query parameters as key-value pairs",
+                        },
+                        "body": {
+                            "type": "object",
+                            "description": "Request body (for POST, PUT, PATCH)",
+                        },
                     },
-                    "required": ["reference"]
-                }
-            ))
+                    "required": ["path", "method"],
+                },
+            )
+        )
+
+        # Only add get_schema tool if references aren't resolved
+        if not self.resolved_references:
+            self.mcp_tools.append(
+                types.Tool(
+                    name=self.get_schema_tool,
+                    description="Get schema definition for $ref references",
+                    inputSchema={
+                        "type": "object",
+                        "properties": {
+                            "reference": {
+                                "type": "string",
+                                "description": "Schema reference (e.g., #/components/schemas/Service)",
+                            }
+                        },
+                        "required": ["reference"],
+                    },
+                )
+            )
 
         # Add quick-access tool for common searches
-        self.mcp_tools.append(types.Tool(
-            name="quick_find",
-            description="""Quick access to most common endpoint categories.
+        self.mcp_tools.append(
+            types.Tool(
+                name="quick_find",
+                description="""Quick access to most common endpoint categories.
 
 Instantly get the most relevant endpoints without searching through hundreds of results:
 • Use this when you know what type of resource you want to work with
@@ -698,23 +726,34 @@ Instantly get the most relevant endpoints without searching through hundreds of 
 • Much faster than searching through all 500+ endpoints
 
 Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs""",
-            inputSchema={
-                "type": "object",
-                "properties": {
-                    "resource_type": {
-                        "type": "string",
-                        "enum": ["ceph-pools", "rbds", "rbd-mirror", "osds", "servers", "services", "cluster", "logs", "stats"],
-                        "description": "Type of resource to find endpoints for"
+                inputSchema={
+                    "type": "object",
+                    "properties": {
+                        "resource_type": {
+                            "type": "string",
+                            "enum": [
+                                "ceph-pools",
+                                "rbds",
+                                "rbd-mirror",
+                                "osds",
+                                "servers",
+                                "services",
+                                "cluster",
+                                "logs",
+                                "stats",
+                            ],
+                            "description": "Type of resource to find endpoints for",
+                        },
+                        "action_type": {
+                            "type": "string",
+                            "enum": ["list", "create", "status", "manage", "all"],
+                            "description": "Type of action you want to perform (optional)",
+                        },
                     },
-                    "action_type": {
-                        "type": "string",
-                        "enum": ["list", "create", "status", "manage", "all"],
-                        "description": "Type of action you want to perform (optional)"
-                    }
+                    "required": ["resource_type"],
                 },
-                "required": ["resource_type"]
-            }
-        ))
+            )
+        )
 
         # Generate category tools for top categories
         for category in self.top_categories:
@@ -732,13 +771,19 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
 
         # Analyze available operations
         methods = set(ep["method"] for ep in endpoints)
-        has_list = any(ep["method"] == "get" and "{" not in ep["path"] for ep in endpoints)
+        has_list = any(
+            ep["method"] == "get" and "{" not in ep["path"] for ep in endpoints
+        )
         # Only consider "get" action if there's a simple resource endpoint like /resource/{id}
         # Exclude complex paths like /resource/status/{timestamp} or /resource/action/{param}
         has_get = any(
-            ep["method"] == "get" and "{" in ep["path"] and
-            ep["path"].count("{") == 1 and  # Only one parameter
-            not any(word in ep["path"].lower() for word in ["status", "history", "action", "config"])  # Exclude status/action endpoints
+            ep["method"] == "get"
+            and "{" in ep["path"]
+            and ep["path"].count("{") == 1  # Only one parameter
+            and not any(
+                word in ep["path"].lower()
+                for word in ["status", "history", "action", "config"]
+            )  # Exclude status/action endpoints
             for ep in endpoints
         )
         has_create = "post" in methods
@@ -759,7 +804,9 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
             actions.append("delete")
 
         tool_name = f"manage_{category.replace('-', '_')}"
-        description = f"Manage {category} resources. Available actions: {', '.join(actions)}"
+        description = (
+            f"Manage {category} resources. Available actions: {', '.join(actions)}"
+        )
 
         # Extract ALL LLM hints for comprehensive tool description
         hint_purposes = []
@@ -814,7 +861,9 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
                 if hints.get("rate_limit"):
                     limit_info = hints["rate_limit"]
                     if isinstance(limit_info, dict):
-                        hint_rate_limits.append(f"{limit_info.get('limit', 'N/A')}/{limit_info.get('window_seconds', 60)}s")
+                        hint_rate_limits.append(
+                            f"{limit_info.get('limit', 'N/A')}/{limit_info.get('window_seconds', 60)}s"
+                        )
 
                 # Collect retry strategy
                 if hints.get("retry_strategy"):
@@ -824,7 +873,9 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
                 if hints.get("recommended_poll_interval"):
                     poll_info = hints["recommended_poll_interval"]
                     if isinstance(poll_info, dict):
-                        hint_poll_intervals.append(f"{poll_info.get('value', 'N/A')} {poll_info.get('unit', 'seconds')}")
+                        hint_poll_intervals.append(
+                            f"{poll_info.get('value', 'N/A')} {poll_info.get('unit', 'seconds')}"
+                        )
 
                 # Collect cache hints
                 if hints.get("cache_hint"):
@@ -850,9 +901,13 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
         # Add workflow guidance if available
         if hint_workflow_guidance:
             if hint_workflow_guidance.get("pre_check"):
-                description += f"\n\nPre-check: {hint_workflow_guidance['pre_check'][:150]}"
+                description += (
+                    f"\n\nPre-check: {hint_workflow_guidance['pre_check'][:150]}"
+                )
             if hint_workflow_guidance.get("post_action"):
-                description += f"\n\nPost-action: {hint_workflow_guidance['post_action'][:150]}"
+                description += (
+                    f"\n\nPost-action: {hint_workflow_guidance['post_action'][:150]}"
+                )
 
         # Add failure modes
         if hint_failure_modes:
@@ -921,29 +976,33 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
                 "action": {
                     "type": "string",
                     "enum": actions,
-                    "description": f"Action to perform on {category}"
+                    "description": f"Action to perform on {category}",
                 },
                 "resource_id": {
                     "type": "string",
-                    "description": f"ID of the {category} resource (for get, update, delete)"
+                    "description": f"ID of the {category} resource (for get, update, delete)",
                 },
                 "filters": {
                     "type": "object",
-                    "description": "Filters for list action (query parameters)"
+                    "description": "Filters for list action (query parameters)",
                 },
                 "data": {
                     "type": "object",
-                    "description": "Data for create or update actions"
-                }
+                    "description": "Data for create or update actions",
+                },
             },
-            "required": ["action"]
+            "required": ["action"],
         }
 
-        self.mcp_tools.append(types.Tool(
-            name=tool_name,
-            description=description[:1500],  # Increased limit to include x-llm-hints
-            inputSchema=input_schema
-        ))
+        self.mcp_tools.append(
+            types.Tool(
+                name=tool_name,
+                description=description[
+                    :1500
+                ],  # Increased limit to include x-llm-hints
+                inputSchema=input_schema,
+            )
+        )
 
     def _prepare_category_tools_only(self):
         """
@@ -952,7 +1011,9 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
         for category in self.top_categories:
             self._generate_category_tool(category)
 
-        logger.info(f"Generated {len(self.mcp_tools)} category tools (categories_only mode)")
+        logger.info(
+            f"Generated {len(self.mcp_tools)} category tools (categories_only mode)"
+        )
 
     def _prepare_api_tools(self):
         """
@@ -1065,7 +1126,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
             tool = types.Tool(
                 name=tool_def["name"],
                 description=enhanced_description,
-                inputSchema=tool_def["inputSchema"]
+                inputSchema=tool_def["inputSchema"],
             )
             self.mcp_tools.append(tool)
             logger.info(f"Added log search tool: {tool_def['name']}")
@@ -1074,7 +1135,6 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         """Return available tools."""
         logger.info(f"Providing {len(self.mcp_tools)} tools")
         return self.mcp_tools
-
 
     async def _make_api_call(
         self,
@@ -1089,9 +1149,9 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         """
         # Auto-add default limits for list operations to prevent token overflow
         if TokenOptimizer.should_optimize(url, method):
-            params = kwargs.get('params', {})
+            params = kwargs.get("params", {})
             params = TokenOptimizer.add_default_limit(url, params)
-            kwargs['params'] = params
+            kwargs["params"] = params
 
         logger.info(f"Calling {method} {url}")
         if filters:
@@ -1134,7 +1194,6 @@ CURRENT TIME CONTEXT (for timestamp calculations):
             logger.error(f"Request error: {e}")
             schema_response = {"code": 500, "error": f"Request failed: {str(e)}"}
             return schema_response
-
 
     async def handle_api_call_tool(
         self,
@@ -1242,7 +1301,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         if name == self.call_endpoint_tool:
             return await self._call_endpoint_direct(arguments)
 
-        if hasattr(self, 'get_schema_tool') and name == self.get_schema_tool:
+        if hasattr(self, "get_schema_tool") and name == self.get_schema_tool:
             return self._resolve_reference_schema(ref_path=arguments["reference"])
 
         # Handle category tools
@@ -1277,12 +1336,17 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         """Handle log search tool call"""
         # Extract host, port, and protocol from self.host
         import re
-        match = re.match(r'(https?)://([^:]+):?(\d+)?', self.host)
+
+        match = re.match(r"(https?)://([^:]+):?(\d+)?", self.host)
         if match:
             protocol = match.group(1)
             host = match.group(2)
-            port = int(match.group(3)) if match.group(3) else (443 if protocol == 'https' else 8080)
-            use_ssl = protocol == 'https'
+            port = (
+                int(match.group(3))
+                if match.group(3)
+                else (443 if protocol == "https" else 8080)
+            )
+            use_ssl = protocol == "https"
         else:
             host = self.host
             port = 8080
@@ -1290,8 +1354,8 @@ CURRENT TIME CONTEXT (for timestamp calculations):
 
         # Add API token and SSL info to arguments
         arguments_with_token = arguments.copy()
-        arguments_with_token['api_token'] = self.api_token
-        arguments_with_token['use_ssl'] = use_ssl
+        arguments_with_token["api_token"] = self.api_token
+        arguments_with_token["use_ssl"] = use_ssl
 
         return await handle_log_search(arguments_with_token, host, port)
 
@@ -1299,12 +1363,17 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         """Handle log check tool call"""
         # Extract host, port, and protocol from self.host
         import re
-        match = re.match(r'(https?)://([^:]+):?(\d+)?', self.host)
+
+        match = re.match(r"(https?)://([^:]+):?(\d+)?", self.host)
         if match:
             protocol = match.group(1)
             host = match.group(2)
-            port = int(match.group(3)) if match.group(3) else (443 if protocol == 'https' else 8080)
-            use_ssl = protocol == 'https'
+            port = (
+                int(match.group(3))
+                if match.group(3)
+                else (443 if protocol == "https" else 8080)
+            )
+            use_ssl = protocol == "https"
         else:
             host = self.host
             port = 8080
@@ -1312,8 +1381,8 @@ CURRENT TIME CONTEXT (for timestamp calculations):
 
         # Add API token and SSL info to arguments
         arguments_with_token = arguments.copy()
-        arguments_with_token['api_token'] = self.api_token
-        arguments_with_token['use_ssl'] = use_ssl
+        arguments_with_token["api_token"] = self.api_token
+        arguments_with_token["use_ssl"] = use_ssl
 
         return await handle_log_check(arguments_with_token, host, port)
 
@@ -1351,22 +1420,36 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                 break
             elif action == "get" and method == "get" and "{" in path and resource_id:
                 # Ensure it's a simple resource endpoint, not a status/action endpoint
-                if (path.count("{") == 1 and
-                    not any(word in path.lower() for word in ["status", "history", "action", "config"])):
+                if path.count("{") == 1 and not any(
+                    word in path.lower()
+                    for word in ["status", "history", "action", "config"]
+                ):
                     target_endpoint = ep
                     break
             elif action == "create" and method == "post" and "{" not in path:
                 target_endpoint = ep
                 break
-            elif action == "update" and method in ["put", "patch"] and "{" in path and resource_id:
+            elif (
+                action == "update"
+                and method in ["put", "patch"]
+                and "{" in path
+                and resource_id
+            ):
                 target_endpoint = ep
                 break
-            elif action == "delete" and method == "delete" and "{" in path and resource_id:
+            elif (
+                action == "delete"
+                and method == "delete"
+                and "{" in path
+                and resource_id
+            ):
                 target_endpoint = ep
                 break
 
         if not target_endpoint:
-            return {"error": f"No endpoint found for action '{action}' in category '{category}'"}
+            return {
+                "error": f"No endpoint found for action '{action}' in category '{category}'"
+            }
 
         # Build the request
         path = target_endpoint["path"]
@@ -1376,7 +1459,8 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         if resource_id and "{" in path:
             # Find parameter name (e.g., {id}, {name}, etc.)
             import re
-            params = re.findall(r'\{([^}]+)\}', path)
+
+            params = re.findall(r"\{([^}]+)\}", path)
             if params:
                 path = path.replace(f"{{{params[0]}}}", str(resource_id))
 
@@ -1402,9 +1486,13 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                         endpoint_def = ep
                         break
 
-                if endpoint_def and self._endpoint_requires_pagination(endpoint_def["path"]):
+                if endpoint_def and self._endpoint_requires_pagination(
+                    endpoint_def["path"]
+                ):
                     default_pagination = self._get_default_pagination(category)
-                    params["pagination"] = json.dumps(default_pagination, separators=(',', ':'))
+                    params["pagination"] = json.dumps(
+                        default_pagination, separators=(",", ":")
+                    )
 
             if params:
                 kwargs["params"] = params
@@ -1419,7 +1507,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
             "category": category,
             "action": action,
             "endpoint": path,
-            "method": method.upper()
+            "method": method.upper(),
         }
 
         # Include ALL LLM hints if available - let the AI use what it needs
@@ -1446,11 +1534,17 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         priority_mapping = {
             "pool": ["ceph-pools"],  # Prioritize Ceph pools over DAOS pools
             "rbd": ["rbds", "rbd-mirror"],
-            "osd": ["crush", "services", "maintenance", "servers", "disks"],  # OSD endpoints are spread across multiple tags
+            "osd": [
+                "crush",
+                "services",
+                "maintenance",
+                "servers",
+                "disks",
+            ],  # OSD endpoints are spread across multiple tags
             "server": ["servers"],
             "service": ["services"],
             "cluster": ["cluster"],
-            "log": ["logs"]
+            "log": ["logs"],
         }
 
         # Map intent to HTTP methods
@@ -1458,7 +1552,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
             "read": ["get"],
             "write": ["post", "put", "patch"],
             "manage": ["delete"],
-            "all": ["get", "post", "put", "delete", "patch"]
+            "all": ["get", "post", "put", "delete", "patch"],
         }
 
         for path, methods in self.api_spec.get("paths", {}).items():
@@ -1471,7 +1565,9 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                     continue
 
                 # Apply intent filter
-                allowed_methods = intent_methods.get(intent_filter, intent_methods["all"])
+                allowed_methods = intent_methods.get(
+                    intent_filter, intent_methods["all"]
+                )
                 if method.lower() not in allowed_methods:
                     continue
 
@@ -1484,7 +1580,9 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                     continue
 
                 # Skip specialty features if not enabled
-                if not self.enable_specialty_features and any(tag in tags for tag in ["rbd-mirror", "qos-settings", "ceph-keys"]):
+                if not self.enable_specialty_features and any(
+                    tag in tags for tag in ["rbd-mirror", "qos-settings", "ceph-keys"]
+                ):
                     continue
 
                 # Skip deprecated endpoints
@@ -1505,7 +1603,10 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                         search_words = search_term.split()
                         if len(search_words) > 1:
                             # All words must be found somewhere in path or summary
-                            if not all(word in path_lower or word in summary_lower for word in search_words):
+                            if not all(
+                                word in path_lower or word in summary_lower
+                                for word in search_words
+                            ):
                                 continue
                         else:
                             # Single word that didn't match exactly, skip
@@ -1519,7 +1620,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                     "operationId": operation.get("operationId", ""),
                     "summary": summary,
                     "tags": tags,
-                    "deprecated": operation.get("deprecated", False)
+                    "deprecated": operation.get("deprecated", False),
                 }
 
                 # Add ALL LLM hints if present - let the AI decide what's important
@@ -1533,8 +1634,12 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                     if any(tag in priority_tags for tag in tags):
                         is_priority = True
                     # Also prioritize if search term appears prominently in path or summary
-                    elif (search_term in path.lower() and path.lower().count(search_term) > 0) or \
-                         (search_term in summary.lower() and len(summary.split()) < 10):  # Short, focused descriptions
+                    elif (
+                        search_term in path.lower()
+                        and path.lower().count(search_term) > 0
+                    ) or (
+                        search_term in summary.lower() and len(summary.split()) < 10
+                    ):  # Short, focused descriptions
                         is_priority = True
 
                 if is_priority:
@@ -1547,7 +1652,9 @@ CURRENT TIME CONTEXT (for timestamp calculations):
 
         # Smart truncation - show more priority results
         if len(priority_results) > 0:
-            max_results = min(50, 30 + len(priority_results))  # Show at least priority + some others
+            max_results = min(
+                50, 30 + len(priority_results)
+            )  # Show at least priority + some others
         else:
             max_results = 50  # Default limit when no priorities
 
@@ -1565,13 +1672,17 @@ CURRENT TIME CONTEXT (for timestamp calculations):
             "priority_count": len(priority_results),
             "endpoints": all_results[:max_results],
             "truncated": len(all_results) > max_results,
-            "optimization_note": f"Prioritized {len(priority_results)} most relevant results" if priority_results else "No prioritization applied",
+            "optimization_note": (
+                f"Prioritized {len(priority_results)} most relevant results"
+                if priority_results
+                else "No prioritization applied"
+            ),
             "filtering_applied": filtering_info if filtering_info else ["None"],
             "intent_filter": intent_filter,
             "feature_flags": {
                 "daos_enabled": self.enable_daos,
-                "specialty_features_enabled": self.enable_specialty_features
-            }
+                "specialty_features_enabled": self.enable_specialty_features,
+            },
         }
 
     async def _call_endpoint_direct(self, arguments: Dict) -> dict[str, Any]:
@@ -1591,11 +1702,15 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         # Add default pagination for endpoints that require it
         if method == "get" and query_params is not None:
             query_params = query_params.copy()  # Don't modify the original
-            if "pagination" not in query_params and self._endpoint_requires_pagination(path):
+            if "pagination" not in query_params and self._endpoint_requires_pagination(
+                path
+            ):
                 # Determine category from endpoint path for appropriate defaults
                 category = self._detect_category_from_path(path)
                 default_pagination = self._get_default_pagination(category)
-                query_params["pagination"] = json.dumps(default_pagination, separators=(',', ':'))
+                query_params["pagination"] = json.dumps(
+                    default_pagination, separators=(",", ":")
+                )
 
         url = f"{self.host}/api{path}"
         headers = {
@@ -1626,12 +1741,18 @@ CURRENT TIME CONTEXT (for timestamp calculations):
             "ceph-pools": "ceph-pools",
             "rbds": "rbds",
             "rbd-mirror": "rbd-mirror",
-            "osds": ["crush", "services", "maintenance", "servers", "disks"],  # OSD is spread across categories
+            "osds": [
+                "crush",
+                "services",
+                "maintenance",
+                "servers",
+                "disks",
+            ],  # OSD is spread across categories
             "servers": "servers",
             "services": "services",
             "cluster": "cluster",
             "logs": "logs",
-            "stats": "stats"
+            "stats": "stats",
         }
 
         target_categories = category_mapping.get(resource_type)
@@ -1660,7 +1781,9 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                 # Filter by action type if specified
                 if action_type != "all":
                     method_lower = method.lower()
-                    if action_type == "list" and not (method_lower == "get" and "{" not in path):
+                    if action_type == "list" and not (
+                        method_lower == "get" and "{" not in path
+                    ):
                         continue
                     elif action_type == "create" and method_lower != "post":
                         continue
@@ -1677,7 +1800,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                     "operationId": operation.get("operationId", ""),
                     "summary": operation.get("summary", ""),
                     "tags": tags,
-                    "deprecated": operation.get("deprecated", False)
+                    "deprecated": operation.get("deprecated", False),
                 }
 
                 if llm_hints:
@@ -1686,11 +1809,13 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                 results.append(endpoint_data)
 
         # Sort by relevance (GET endpoints first, then by path simplicity)
-        results.sort(key=lambda x: (
-            0 if x["method"] == "GET" else 1,
-            x["path"].count("/"),
-            x["path"]
-        ))
+        results.sort(
+            key=lambda x: (
+                0 if x["method"] == "GET" else 1,
+                x["path"].count("/"),
+                x["path"],
+            )
+        )
 
         return {
             "resource_type": resource_type,
@@ -1698,7 +1823,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
             "total": len(results),
             "endpoints": results[:20],  # Limit to top 20 most relevant
             "truncated": len(results) > 20,
-            "optimization_note": f"Showing most relevant {target_category} endpoints"
+            "optimization_note": f"Showing most relevant {target_category} endpoints",
         }
 
     def _endpoint_requires_pagination(self, endpoint_path: str) -> bool:
@@ -1707,7 +1832,9 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         Supports both exact paths and parameterized paths.
         """
         # First try exact match
-        endpoint_spec = self.api_spec.get("paths", {}).get(endpoint_path, {}).get("get", {})
+        endpoint_spec = (
+            self.api_spec.get("paths", {}).get(endpoint_path, {}).get("get", {})
+        )
 
         if endpoint_spec:
             parameters = endpoint_spec.get("parameters", [])
@@ -1721,7 +1848,9 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                 get_spec = methods.get("get", {})
                 parameters = get_spec.get("parameters", [])
                 for param in parameters:
-                    if param.get("name") == "pagination" and param.get("required", False):
+                    if param.get("name") == "pagination" and param.get(
+                        "required", False
+                    ):
                         return True
 
         return False
@@ -1736,8 +1865,8 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         # Convert template to regex pattern
         # Replace {param} with regex that matches path segments
         pattern = re.escape(template_path)
-        pattern = re.sub(r'\\\{[^}]+\\\}', r'[^/]+', pattern)
-        pattern = f'^{pattern}$'
+        pattern = re.sub(r"\\\{[^}]+\\\}", r"[^/]+", pattern)
+        pattern = f"^{pattern}$"
 
         return bool(re.match(pattern, actual_path))
 
@@ -1776,16 +1905,11 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                 "limit": 20,
                 "after": 0,
                 "where": {},
-                "sortBy": [["pool", "ASC"], ["namespace", "ASC"], ["name", "ASC"]]
+                "sortBy": [["pool", "ASC"], ["namespace", "ASC"], ["name", "ASC"]],
             }
 
         # Generic default
-        return {
-            "limit": 20,
-            "after": 0,
-            "where": {},
-            "sortBy": []
-        }
+        return {"limit": 20, "after": 0, "where": {}, "sortBy": []}
 
     async def cleanup(self):
         """Cleanup resources."""

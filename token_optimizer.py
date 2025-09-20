@@ -17,56 +17,56 @@ class TokenOptimizer:
 
     # Default limits for different endpoint types
     DEFAULT_LIMITS = {
-        'list': 10,
-        'get_all': 20,
-        'services': 25,
-        'servers': 25,
-        'osds': 30,
-        'stats': 50,
-        'logs': 100,
-        'audit': 50,
-        'export': 200,
+        "list": 10,
+        "get_all": 20,
+        "services": 25,
+        "servers": 25,
+        "osds": 30,
+        "stats": 50,
+        "logs": 100,
+        "audit": 50,
+        "export": 200,
     }
 
     # Essential fields for common resources
     ESSENTIAL_FIELDS = {
-        'servers': ['id', 'hostname', 'ip', 'status', 'role'],
-        'services': ['id', 'name', 'type', 'status', 'hostname'],
-        'osds': ['id', 'osd', 'status', 'host', 'used_percent', 'up'],
-        'pools': ['name', 'pool_id', 'size', 'used_bytes', 'percent_used'],
-        'rbds': ['name', 'pool', 'size', 'used_size'],
-        's3': ['bucket', 'owner', 'size', 'num_objects'],
-        'tasks': ['id', 'name', 'status', 'progress', 'error'],
-        'logs': ['timestamp', 'level', 'service', 'message'],
+        "servers": ["id", "hostname", "ip", "status", "role"],
+        "services": ["id", "name", "type", "status", "hostname"],
+        "osds": ["id", "osd", "status", "host", "used_percent", "up"],
+        "pools": ["name", "pool_id", "size", "used_bytes", "percent_used"],
+        "rbds": ["name", "pool", "size", "used_size"],
+        "s3": ["bucket", "owner", "size", "num_objects"],
+        "tasks": ["id", "name", "status", "progress", "error"],
+        "logs": ["timestamp", "level", "service", "message"],
     }
 
     @classmethod
     def should_optimize(cls, url: str, method: str) -> bool:
         """Check if this request should be optimized."""
         # Only optimize GET requests that likely return lists
-        if method.upper() != 'GET':
+        if method.upper() != "GET":
             return False
 
         # Check if URL suggests a list operation
-        list_indicators = ['/list', '/all', 'get_all', '/export']
+        list_indicators = ["/list", "/all", "get_all", "/export"]
         return any(indicator in url.lower() for indicator in list_indicators)
 
     @classmethod
     def add_default_limit(cls, url: str, params: Dict) -> Dict:
         """Add a default limit parameter if not present."""
         # Don't add if already has pagination params
-        if any(key in params for key in ['limit', 'max', 'size', 'offset', 'page']):
+        if any(key in params for key in ["limit", "max", "size", "offset", "page"]):
             return params
 
         # Determine appropriate limit based on URL
-        limit = cls.DEFAULT_LIMITS.get('list', 25)  # default
+        limit = cls.DEFAULT_LIMITS.get("list", 25)  # default
 
         for keyword, specific_limit in cls.DEFAULT_LIMITS.items():
             if keyword in url.lower():
                 limit = specific_limit
                 break
 
-        params['limit'] = limit
+        params["limit"] = limit
         logger.info(f"Auto-added limit={limit} for {url}")
         return params
 
@@ -92,11 +92,13 @@ class TokenOptimizer:
             return data
 
         # Adjust limit based on data type
-        if '/log' in url.lower() or '/audit' in url.lower():
+        if "/log" in url.lower() or "/audit" in url.lower():
             max_items = min(100, original_count)  # More for logs
-        elif '/stats' in url.lower():
+        elif "/stats" in url.lower():
             max_items = min(75, original_count)  # Medium for stats
-        elif any(resource in url.lower() for resource in ['/services', '/servers', '/osds']):
+        elif any(
+            resource in url.lower() for resource in ["/services", "/servers", "/osds"]
+        ):
             max_items = min(25, original_count)  # Less for resources
 
         truncated_data = data[:max_items]
@@ -112,8 +114,8 @@ class TokenOptimizer:
                 "truncation_message": (
                     f"Response truncated from {original_count} to {max_items} items to save tokens. "
                     f"Use pagination (limit/offset) or filters to get specific data."
-                )
-            }
+                ),
+            },
         }
 
     @classmethod
@@ -148,7 +150,7 @@ class TokenOptimizer:
         return {key: obj[key] for key in fields if key in obj}
 
     @classmethod
-    def generate_summary(cls, data: Any, summary_type: str = 'stats') -> Dict:
+    def generate_summary(cls, data: Any, summary_type: str = "stats") -> Dict:
         """
         Generate a summary of large datasets instead of full data.
 
@@ -167,38 +169,40 @@ class TokenOptimizer:
             "summary_type": summary_type,
         }
 
-        if summary_type == 'count':
+        if summary_type == "count":
             # Just count
             return summary
 
-        elif summary_type == 'stats' and data and isinstance(data[0], dict):
+        elif summary_type == "stats" and data and isinstance(data[0], dict):
             # Statistical summary
             summary["sample"] = data[:3]  # First 3 as sample
 
             # Count by status if available
-            if 'status' in data[0]:
+            if "status" in data[0]:
                 status_counts = {}
                 for item in data:
-                    status = item.get('status', 'unknown')
+                    status = item.get("status", "unknown")
                     status_counts[status] = status_counts.get(status, 0) + 1
                 summary["status_distribution"] = status_counts
 
             # Count by type if available
-            if 'type' in data[0]:
+            if "type" in data[0]:
                 type_counts = {}
                 for item in data:
-                    item_type = item.get('type', 'unknown')
+                    item_type = item.get("type", "unknown")
                     type_counts[item_type] = type_counts.get(item_type, 0) + 1
                 summary["type_distribution"] = type_counts
 
-        elif summary_type == 'errors_only':
+        elif summary_type == "errors_only":
             # Only return items with errors
             error_items = [
-                item for item in data
-                if isinstance(item, dict) and (
-                    item.get('status') in ['error', 'failed', 'down'] or
-                    item.get('error') or
-                    item.get('has_error')
+                item
+                for item in data
+                if isinstance(item, dict)
+                and (
+                    item.get("status") in ["error", "failed", "down"]
+                    or item.get("error")
+                    or item.get("has_error")
                 )
             ]
             summary["error_count"] = len(error_items)
@@ -281,7 +285,9 @@ class TokenOptimizer:
                     return False
 
             # Numeric comparisons
-            elif isinstance(value, str) and any(op in value[:2] for op in [">=", "<=", "!=", ">", "<", "="]):
+            elif isinstance(value, str) and any(
+                op in value[:2] for op in [">=", "<=", "!=", ">", "<", "="]
+            ):
                 if not cls._numeric_comparison(item_value, value):
                     return False
 
@@ -355,8 +361,10 @@ class TokenOptimizer:
             Enhanced description with optimization hints
         """
         # Check if this endpoint typically returns large data
-        large_data_patterns = ['/list', '/all', '/export', '/stats', '/logs']
-        is_large = any(pattern in endpoint_path.lower() for pattern in large_data_patterns)
+        large_data_patterns = ["/list", "/all", "/export", "/stats", "/logs"]
+        is_large = any(
+            pattern in endpoint_path.lower() for pattern in large_data_patterns
+        )
 
         if not is_large:
             return tool_description
@@ -372,20 +380,22 @@ class TokenOptimizer:
 """
 
         # Add specific hints based on endpoint type
-        if '/services' in endpoint_path:
+        if "/services" in endpoint_path:
             hints += "• Filter by service type or status for relevant results\n"
-        elif '/servers' in endpoint_path:
+        elif "/servers" in endpoint_path:
             hints += "• Filter by server role or status\n"
-        elif '/logs' in endpoint_path:
+        elif "/logs" in endpoint_path:
             hints += "• Use time ranges and severity filters\n"
-        elif '/stats' in endpoint_path:
+        elif "/stats" in endpoint_path:
             hints += "• Consider using aggregation parameters if available\n"
 
         return tool_description + hints
 
 
 # Example integration function for the main MCP server
-def optimize_api_response(url: str, method: str, response_data: Any, params: Dict = None) -> Any:
+def optimize_api_response(
+    url: str, method: str, response_data: Any, params: Dict = None
+) -> Any:
     """
     Main entry point for response optimization.
 
@@ -399,7 +409,7 @@ def optimize_api_response(url: str, method: str, response_data: Any, params: Dic
         Optimized response data
     """
     # Skip if optimization disabled
-    if params and params.get('no_optimize'):
+    if params and params.get("no_optimize"):
         return response_data
 
     # Apply truncation for large responses
