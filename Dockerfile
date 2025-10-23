@@ -20,5 +20,6 @@ USER mcp
 COPY mcp-croit-ceph.py /app/
 COPY token_optimizer.py /app/
 COPY croit_log_tools.py /app/
+COPY openapi.json /app/
 ENV MCP_ARGS=""
 ENTRYPOINT ["bash", "-c", "python /app/mcp-croit-ceph.py $MCP_ARGS"]

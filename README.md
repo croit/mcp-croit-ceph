@@ -1,395 +1,202 @@
 # MCP Croit Ceph
 
-An MCP (Model Context Protocol) server for interacting with Croit Ceph clusters through their REST API.
+MCP server that exposes the Croit Ceph REST API (and VictoriaLogs) to Model Context Protocol clients with built-in token optimization and tool generation.
 
-## Current Status
+---
 
-- **580** total API endpoints
-- **575** endpoints with x-llm-hints (99.1% coverage)
-- **100%** endpoints have summaries
-- **13** tools in hybrid mode (97% reduction)
-- **Full support** for all x-llm-hints fields
+## Use the Tool
 
-## Features
+### Client Integrations (Copy & Paste)
 
-### Automatic Token Optimization
-
-The MCP server automatically optimizes responses to reduce token consumption:
-- **Auto-limits**: Adds default limits (10-100 items) to list operations
-- **Smart truncation**: Large responses automatically truncated with metadata
-- **Optimization hints**: Tool descriptions include token-saving tips
-- **Response metadata**: Truncated responses include info on how to get more data
-
-Example: Instead of 500 services (50,000 tokens), you get 25 services + metadata (2,500 tokens)
-
-### Built-in Filtering (grep-like search)
-
-Filter API responses locally without multiple calls:
-- **Field filtering**: `_filter_status='error'` - exact match
-- **Regex patterns**: `_filter_name='~ceph.*'` - pattern matching
-- **Numeric comparisons**: `_filter_size='>1000'` - greater than
-- **Text search**: `_filter__text='timeout'` - search all text fields
-- **Field existence**: `_filter__has='error_message'` - has field
-- **Multiple values**: `_filter_status=['error','warning']` - OR logic
-
-Example: Find errors in 500 services with one call:
-```
-_filter_status='error' → Returns only 5 error services (99% token savings)
-```
-
-### Hybrid Mode (Default) - 97% Fewer Tools!
-
-The new hybrid mode reduces the tool count from 580 individual endpoint tools to just **13 tools total**:
-- **3 Base tools** for full API access
-- **10 Category tools** for common operations (services, maintenance, s3, pools, etc.)
-
-This dramatic reduction improves:
-- LLM performance and response times
-- Tool discovery and usability
-- Memory efficiency
-- Startup time
-
-### Tool Generation Modes
-
-1. **`hybrid`** (default): Combines base tools with category tools for optimal balance
-2. **`base_only`**: Only 3 base tools for minimal footprint
-3. **`categories_only`**: Only category tools for simplified operations
-4. **`endpoints_as_tools`**: Legacy mode with 580 individual tools (one per API endpoint)
-
-### Dynamic Features
-
-- **Automatic API Discovery**: Fetches OpenAPI spec from your Croit cluster
-- **Permission-Based Filtering**: Role-based tool filtering (ADMIN vs VIEWER)
-- **Full x-llm-hints Support**: 575+ endpoints with AI optimization hints
-- **Local OpenAPI Support**: Use a local OpenAPI spec file for testing/development
-- **Schema Resolution**: Handles `$ref` references automatically
-
-### Advanced x-llm-hints Integration
-
-The MCP server fully integrates Croit's x-llm-hints into tool descriptions for optimal LLM guidance:
-
-**What x-llm-hints provide:**
-- **Purpose**: Clear description of what each endpoint does
-- **Usage examples**: Common use cases and workflow guidance
-- **Failure modes**: Expected errors and how to handle them
-- **Rate limits**: API throttling information for efficient usage
-- **Retry strategies**: How to handle transient failures
-- **Poll intervals**: Recommended refresh rates for live data
-- **Cache hints**: Response caching strategies
-- **Related endpoints**: Cross-references for complex workflows
-
-**Examples of integrated hints:**
-```
-manage_cluster tool:
-Purpose: Bootstrap a brand-new Ceph cluster using the selected MON disk and IP address.
-
-Common usage:
-• Invoke immediately after fetching candidates from GET /cluster/create/mons
-• Monitor the returned ManagedTask via /tasks/{id} until bootstrap completes
-
-Failure modes:
-• 400: Validate disk/server eligibility via GET /cluster/create/mons
-• 409: If concurrent bootstrap is in progress, wait for existing task
-
-Rate limits: 60/300s, 30/300s
-Retry strategy: manual_retry, exponential_backoff
-```
-
-**Benefits for LLMs:**
-- **Context-aware operations**: LLMs understand when and how to use each tool
-- **Error handling**: Proactive guidance on handling API errors
-- **Performance optimization**: Built-in rate limiting and caching awareness
-- **Workflow intelligence**: Understanding of multi-step operations
-
-## Installation
-
-⚠️ **IMPORTANT**: This project requires a virtual environment due to system-managed Python environments.
-
-```bash
-# Clone the repository
-git clone https://github.com/croit/mcp-croit-ceph.git
-cd mcp-croit-ceph
-
-# Create and activate virtual environment (REQUIRED)
-python3 -m venv venv
-source venv/bin/activate  # Linux/Mac
-# or: venv\Scripts\activate  # Windows
-
-# Install dependencies in virtual environment
-pip install -r requirements.txt
-```
-
-**Note**: Always activate the virtual environment (`source venv/bin/activate`) before running any Python commands or tests.
-
-## Configuration
-
-Set up your environment variables:
-
-```bash
-export CROIT_HOST="https://your-croit-cluster.com"
-export CROIT_API_TOKEN="your-api-token"
-```
-
-Or use a config file at `/config/config.json`:
-
-```json
-{
-  "host": "https://your-croit-cluster.com",
-  "api_token": "your-api-token"
-}
-```
-
-## Usage
-
-### Basic Usage (Hybrid Mode)
-
-```bash
-# Activate virtual environment first (REQUIRED)
-source venv/bin/activate
-
-# Default hybrid mode with permission checking
-python mcp-croit-ceph.py
-```
-
-### Advanced Options
-
-```bash
-# Activate virtual environment first (REQUIRED)
-source venv/bin/activate
-
-# Use local OpenAPI spec file
-python mcp-croit-ceph.py --openapi-file openapi.json
-
-# Skip permission checking (faster startup)
-python mcp-croit-ceph.py --no-permission-check
-
-# Use only base tools (minimal mode)
-python mcp-croit-ceph.py --mode base_only
-
-# Use only category tools
-python mcp-croit-ceph.py --mode categories_only
-
-# Legacy mode with all 580 endpoint tools (not recommended)
-python mcp-croit-ceph.py --mode endpoints_as_tools
-
-# Customize category tool limits
-python mcp-croit-ceph.py --max-category-tools 5
-```
-
-## Tool Modes Explained
-
-### Hybrid Mode (Recommended)
-
-Provides the best balance with ~13 tools:
-
-**Base Tools:**
-- `list_endpoints` - Search and filter API endpoints
-- `call_endpoint` - Direct API calls to any endpoint
-- `get_schema` - Resolve schema references
-
-**Category Tools (top 10):**
-- `manage_services` - Ceph services operations
-- `manage_maintenance` - Maintenance tasks
-- `manage_s3` - S3 bucket management
-- `manage_pools` - Storage pool operations
-- `manage_servers` - Server management
-- And more...
-
-Each category tool supports actions like: `list`, `get`, `create`, `update`, `delete`
-
-### Base Only Mode
-
-Minimal setup with just 3 tools for full API access:
-- `list_api_endpoints` - Discover available endpoints
-- `call_api_endpoint` - Make API calls
-- `get_reference_schema` - Resolve schemas
-
-### Categories Only Mode
-
-Simplified interface with only category tools, no base tools.
-
-### Endpoints as Tools Mode (Legacy)
-
-Creates 580 individual tools (one per API endpoint). Not recommended due to:
-- Performance overhead
-- Difficult tool discovery
-- MCP client limitations
-
-## Permission-Based Filtering
-
-The server intelligently filters tools based on the API token's role:
-
-1. **Automatic Role Detection**: Fetches roles via `/auth/token-info` endpoint
-2. **Role-Based Access**:
-   - **ADMIN role**: Full access to all categories
-   - **VIEWER/other roles**: All categories except admin-only operations
-   - **Invalid token**: Server will exit with error (no access)
-
-### Category Access Control
-
-**Admin-Only Categories:**
-- `maintenance`, `servers`, `ipmi` - System management
-- `config`, `hooks`, `change-requests` - Configuration changes
-- `config-templates` - Template management
-
-**All Other Categories** are accessible to VIEWER roles for read operations:
-- `cluster`, `status`, `stats` - Monitoring
-- `logs`, `disks`, `services` - Information viewing
-- `s3`, `cephfs`, `rbds`, `pools` - Storage info
-- `authentication`, `images`, `daos` - Read operations
-- And all others not listed as admin-only
-
-This role-based approach is fast and ensures users only see tools they can actually use.
-
-## Using Local OpenAPI Spec
-
-For offline development or testing:
-
-```bash
-# Download spec from your cluster
-curl -H "Authorization: Bearer $CROIT_API_TOKEN" \
-     https://your-cluster/api/swagger.json > openapi.json
-
-# Use the local file
-python mcp-croit-ceph.py --openapi-file openapi.json
-```
-
-## MCP Integration
-
-### With Claude Desktop
-
-Add to your Claude Desktop config:
+#### Claude Desktop
+Add the server to `~/.config/Claude/claude_desktop_config.json` (adjust paths, secrets, and image tag as needed):
 
 ```json
 {
   "mcpServers": {
-    "croit-ceph": {
-      "command": "python",
-      "args": ["/path/to/mcp-croit-ceph.py"],
-      "env": {
-        "CROIT_HOST": "https://your-cluster",
-        "CROIT_API_TOKEN": "your-token"
-      }
+    "mcp-croit-ceph": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i", "--net=host",
+        "-e", "USE_INCLUDED_API_SPEC=1",
+        "-e", "CROIT_HOST=https://your-croit-management-node:8080",
+        "-e", "CROIT_API_TOKEN=REPLACE_WITH_TOKEN",
+        "croit/mcp-croit-ceph:latest"
+      ]
     }
   }
 }
 ```
 
-### With Other MCP Clients
+#### Claude Code
+Claude Code reads MCP servers from `~/.config/Claude/claude_code_config.json`. Reuse the same command/args block:
 
-The server implements the standard MCP protocol and works with any compatible client.
+```json
+{
+  "mcpServers": {
+    "mcp-croit-ceph": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i", "--net=host",
+        "-e", "USE_INCLUDED_API_SPEC=1",
+        "-e", "CROIT_HOST=https://your-croit-management-node:8080",
+        "-e", "CROIT_API_TOKEN=REPLACE_WITH_TOKEN",
+        "croit/mcp-croit-ceph:latest"
+      ]
+    }
+  }
+}
+```
 
-## Command Line Arguments
+#### Codex CLI
+To use the server inside the Codex CLI, add it to `~/.config/codex/mcp_servers.json`:
 
-| Argument | Description | Default |
-|----------|-------------|---------|
-| `--mode` | Tool generation mode | `hybrid` |
-| `--openapi-file` | Local OpenAPI spec file | None (fetch from server) |
-| `--no-permission-check` | Skip permission checking | False (check enabled) |
-| `--max-category-tools` | Max category tools to generate | 10 |
-| `--no-resolve-references` | Don't resolve $ref in spec | False (resolve enabled) |
-| `--offer-whole-spec` | Include full spec in list tool | False |
+```json
+{
+  "mcpServers": {
+    "croit-ceph": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i", "--net=host",
+        "-e", "USE_INCLUDED_API_SPEC=1",
+        "-e", "CROIT_HOST=https://your-croit-management-node:8080",
+        "-e", "CROIT_API_TOKEN=REPLACE_WITH_TOKEN",
+        "croit/mcp-croit-ceph:latest"
+      ]
+    }
+  }
+}
+```
 
-## Docker Usage
+#### Gemini Advanced Code Assist
+Gemini’s MCP bridge uses `~/.config/google/gemini/mcp_servers.json`. Register the server with the same command:
 
-### Build and Run with Docker
+```json
+{
+  "servers": {
+    "croit-ceph": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i", "--net=host",
+        "-e", "USE_INCLUDED_API_SPEC=1",
+        "-e", "CROIT_HOST=https://your-croit-management-node:8080",
+        "-e", "CROIT_API_TOKEN=REPLACE_WITH_TOKEN",
+        "croit/mcp-croit-ceph:latest"
+      ]
+    }
+  }
+}
+```
 
+Configuration file locations can vary between releases—if your client cannot see the server, check its MCP documentation and point it at the same Docker (or Python) command shown above. Remove `USE_INCLUDED_API_SPEC=1` if you prefer the server to fetch the live spec from `CROIT_HOST`, or provide your own JSON via `OPENAPI_FILE=/path/to/spec.json`.
+
+#### What You Need
+- A reachable Croit Ceph cluster (`CROIT_HOST`)
+- An API token with suitable permissions (`CROIT_API_TOKEN`)
+- Optional: a cached OpenAPI document (`openapi.json`) for offline or repeatable startup
+
+The server reads configuration from environment variables first and falls back to `/config/config.json`:
+
+```json
+{
+  "host": "https://your-croit-cluster.example:8080",
+  "api_token": "xxxxxx"
+}
+```
+
+By default the MCP server downloads the latest OpenAPI spec from `CROIT_HOST`. Set `USE_INCLUDED_API_SPEC=1` (or pass `--use-included-api-spec`) to load the enhanced spec bundled with this project instead.
+
+### Tooling at Runtime
+- **Hybrid mode (default):** ~13 tools combining discovery (`list_endpoints`, `call_endpoint`, `get_schema`) with curated categories (services, pools, maintenance, etc.).
+- **Base only:** Minimal surface using the three base tools.
+- **Categories only:** Just the curated categories for a guided experience.
+- **Endpoints as tools:** One MCP tool per REST endpoint (legacy, heavy).
+
+Token optimization features automatically add pagination defaults, truncate large payloads with metadata, and support server-side filtering parameters such as `_filter_status`, `_filter__text`, numeric comparisons, and regex matching.
+
+#### Log Intelligence
+If `croit_log_tools.py` is available, `croit_log_search` and `croit_log_check` expose VictoriaLogs directly with:
+- Intent parsing for common Ceph trouble patterns
+- Direct JSON query support (`_and`, `_or`, `_regex`, `_exists`, ...)
+- Smart summaries: priority breakdowns, critical event extraction, server activity, recommendations
+
+---
+
+## Develop the Tool
+
+### Repository Layout
+- `mcp-croit-ceph.py` – main server, tool generation, configuration loading.
+- `token_optimizer.py` – applies default limits, truncation, field filtering, and summaries.
+- `croit_log_tools.py` – VictoriaLogs WebSocket client, intent parser, templates, response summariser.
+- `ARCHITECTURE.md` – system design deep dive.
+- `Dockerfile` / `build.sh` – container build assets.
+
+### Local Development Workflow
 ```bash
-# Build the Docker image
-docker build -t mcp-croit-ceph .
+python3 -m venv venv
+source venv/bin/activate          # Windows: venv\Scripts\activate
+pip install -r requirements.txt
 
-# Run with environment variables
-docker run -it --rm \
+export CROIT_HOST="https://dev-cluster"
+export CROIT_API_TOKEN="dev-token"
+python mcp-croit-ceph.py --openapi-file openapi.json --no-permission-check
+```
+
+- Helpful switches:
+  - `--mode {hybrid,base_only,categories_only,endpoints_as_tools}`
+  - `--openapi-file PATH` to reuse a local spec
+  - `--use-included-api-spec` to force the bundled spec without setting env vars
+  - `--no-permission-check` to skip role discovery when testing
+  - `--max-category-tools N` to cap category fan-out
+- Toggle debug output with `LOG_LEVEL=DEBUG`.
+- To test against recorded specs, drop them in `openapi.json` or mount via Docker.
+
+### Standalone Docker (local testing)
+```bash
+docker run --rm -it \
   -e CROIT_HOST="https://your-cluster" \
   -e CROIT_API_TOKEN="your-token" \
-  mcp-croit-ceph
-
-# Run with local OpenAPI spec (for testing)
-docker run -it --rm \
-  -v $(pwd)/openapi.json:/config/openapi.json:ro \
-  -e CROIT_HOST="http://dummy" \
-  -e CROIT_API_TOKEN="dummy" \
-  mcp-croit-ceph \
-  --mode hybrid --openapi-file /config/openapi.json --no-permission-check
+  croit/mcp-croit-ceph:latest
 ```
 
-### Docker Compose
+Add `-e USE_INCLUDED_API_SPEC=1` if you want to exercise the bundled spec without touching the cluster.
 
-```yaml
-version: '3.8'
-services:
-  mcp-croit-ceph:
-    image: mcp-croit-ceph:latest
-    environment:
-      CROIT_HOST: "${CROIT_HOST}"
-      CROIT_API_TOKEN: "${CROIT_API_TOKEN}"
-      MCP_ARGS: "--mode hybrid"
-    volumes:
-      # Optional: Use local OpenAPI spec
-      - ./openapi.json:/config/openapi.json:ro
-```
-
-## Development
-
-⚠️ **Remember**: Always activate the virtual environment before development work:
+#### Local Spec + Host Network example
+Ideal when you want the enhanced spec shipped with the container and need to reach services on localhost:
 ```bash
-source venv/bin/activate
+docker run --rm -it \
+  --net=host \
+  -e USE_INCLUDED_API_SPEC=1 \
+  -e CROIT_HOST="https://your-croit-management-node:8080" \
+  -e CROIT_API_TOKEN="REPLACE_WITH_TOKEN" \
+  croit/mcp-croit-ceph:latest
 ```
 
-### Testing Tool Count
+### Testing & Tooling
+- Targeted scripts: `python test_timestamp_fix.py`, `python test_actual_mcp.py`.
+- Measure tool counts quickly:
+  ```bash
+  for mode in hybrid base_only categories_only; do
+    python mcp-croit-ceph.py --mode "$mode" --openapi-file openapi.json --no-permission-check \
+      2>&1 | grep -o 'Generated [0-9]* tools'
+  done
+  ```
+- Docker build for release:
+  ```bash
+  docker build -t mcp-croit-ceph:latest .
+  docker tag mcp-croit-ceph:latest croit/mcp-croit-ceph
+  ```
 
-```bash
-# Activate virtual environment first
-source venv/bin/activate
+### Contributing Tips
+- Always work in a virtual environment; system Python is managed.
+- Keep changes ASCII unless a file already uses other encodings.
+- Architecture and x-llm-hints behaviour are documented in `ARCHITECTURE.md`—skim it before large changes.
+- When adding endpoints or categories, consider performance impact (token optimizer limits, log tools availability).
 
-# Check how many tools will be generated in each mode
-for mode in hybrid base_only categories_only; do
-  echo "$mode: $(python mcp-croit-ceph.py --mode $mode --openapi-file openapi.json --no-permission-check 2>&1 | grep -o 'Generated [0-9]* tools')"
-done
-```
+---
 
-### Debug Logging
-
-```bash
-# Activate virtual environment first
-source venv/bin/activate
-
-# Enable debug logging
-export LOG_LEVEL=DEBUG
-python mcp-croit-ceph.py
-```
-
-### Testing with Local OpenAPI Spec
-
-```bash
-# Activate virtual environment first
-source venv/bin/activate
-
-# Use the test script
-./test-local.sh
-
-# Or manually test different modes
-python mcp-croit-ceph.py --mode hybrid --openapi-file openapi.json --no-permission-check
-```
-
-### Running Tests
-
-```bash
-# Activate virtual environment first
-source venv/bin/activate
-
-# Run timestamp fix test
-python test_timestamp_fix.py
-
-# Run other tests (ensure dependencies are installed in venv)
-python test_actual_mcp.py
-```
-
-## License
-
-Apache 2.0
-
-## Support
-
-For issues specific to this MCP server, please open an issue in this repository.
-For Croit-specific questions, contact Croit support.
+## Reference
+- License: Apache 2.0 (`LICENSE`)
+- MCP registry metadata: `server.json`
+- Need implementation details? Start with `ARCHITECTURE.md`.
+- Support: file an issue in this repository or reach out to Croit support for cluster-specific questions.

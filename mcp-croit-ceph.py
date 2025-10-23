@@ -72,6 +72,7 @@ class CroitCephServer:
         max_category_tools=10,  # Maximum number of category tools to generate
         min_endpoints_per_category=1,  # Minimum endpoints needed for a category tool
         openapi_file=None,  # Optional: Use local OpenAPI spec file instead of fetching from server
+        use_included_api_spec=False,  # Use OpenAPI spec bundled with the package
         enable_log_tools=True,  # Enable advanced log search tools
         enable_daos=False,  # Enable DAOS-specific tools and endpoints
         enable_specialty_features=True,  # Enable specialty features (rbd-mirror, etc.)
@@ -104,9 +105,27 @@ class CroitCephServer:
         self.max_category_tools = max_category_tools
         self.min_endpoints_per_category = min_endpoints_per_category
         self.openapi_file = openapi_file
+        self.packaged_spec_path = Path(__file__).with_name("openapi.json")
+        env_use_included = os.environ.get("USE_INCLUDED_API_SPEC", "")
+        self.use_included_api_spec = use_included_api_spec or (
+            str(env_use_included).lower() in {"1", "true", "yes", "on"}
+        )
+
+        if self.use_included_api_spec and not self.openapi_file:
+            if self.packaged_spec_path.exists():
+                self.openapi_file = str(self.packaged_spec_path)
+                logger.info(
+                    "USE_INCLUDED_API_SPEC enabled; using bundled spec at %s",
+                    self.openapi_file,
+                )
+            else:
+                logger.warning(
+                    "USE_INCLUDED_API_SPEC enabled, but bundled spec not found at %s",
+                    self.packaged_spec_path,
+                )
 
         self._load_config()
-        if openapi_file:
+        if self.openapi_file:
             self._load_local_swagger_spec()
         else:
             self._fetch_swagger_spec()
@@ -1986,6 +2005,11 @@ async def main():
         help="Use local OpenAPI spec file instead of fetching from server",
     )
     parser.add_argument(
+        "--use-included-api-spec",
+        action="store_true",
+        help="Use the OpenAPI spec bundled with this package instead of fetching from the cluster",
+    )
+    parser.add_argument(
         "--enable-daos",
         action="store_true",
         help="Enable DAOS-specific tools and endpoints (reduces tool count by ~30 when disabled)",
@@ -2003,6 +2027,7 @@ async def main():
         offer_whole_spec=args.offer_whole_spec,
         max_category_tools=args.max_category_tools,
         openapi_file=args.openapi_file,
+        use_included_api_spec=args.use_included_api_spec,
         enable_daos=args.enable_daos,
         enable_specialty_features=not args.disable_specialty_features,
     )
