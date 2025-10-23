@@ -2,7 +2,7 @@
   "$schema": "https://registry.modelcontextprotocol.org/server.schema.json",
   "name": "io.github.croit/mcp-croit-ceph",
   "description": "MCP server for Croit Ceph cluster management with dynamic OpenAPI tool generation",
-  "version": "0.4.1",
+  "version": "0.4.4",
   "author": {
     "name": "Croit",
     "url": "https://github.com/croit"
@@ -17,14 +17,14 @@
   "tags": ["ceph", "storage", "cluster-management", "croit", "openapi"],
   "packages": [
     {
-      "version": "0.4.1",
-      "registry_type": "oci",
+      "version": "0.4.4",
+      "registryType": "oci",
       "identifier": "croit/mcp-croit-ceph",
-      "registry_base_url": "https://docker.io",
+      "registryBaseUrl": "https://docker.io",
       "transport": {
         "type": "stdio"
       },
-      "environment_variables": [
+      "environmentVariables": [
         {
           "name": "CROIT_HOST",
           "description": "Croit cluster URL (e.g., http://your-cluster.croit.io:8080)",
@@ -37,6 +37,5 @@
         }
       ]
     }
-  ],
-  "status": "active"
+  ]
 }

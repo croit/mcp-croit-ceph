@@ -114,6 +114,30 @@ By default the MCP server downloads the latest OpenAPI spec from `CROIT_HOST`. S
 
 Token optimization features automatically add pagination defaults, truncate large payloads with metadata, and support server-side filtering parameters such as `_filter_status`, `_filter__text`, numeric comparisons, and regex matching.
 
+### Usage Examples
+- **Check my Ceph cluster**
+  Prompt the assistant:
+  > “Summarise any warnings or degraded services of my Ceph cluster for me.”
+  Follow-up prompt ideas: “If the health is degraded, list the checks and link to suggested remediation.”
+
+- **Install the first monitor on the 10 GB disk of server 1**
+  Prompt sequence:
+  1. “List MON deployment candidates and show disks mapped to server 1.”
+  2. “Use the selected disk to run the cluster deploy action and return the task id so I can follow progress.”
+  Encourage the assistant to monitor `/tasks/{id}` until the bootstrap finishes.
+
+- **Deploy OSDs on every free drive of server 3**
+  Prompt sequence:
+  1. “Show me the disks on server 3 and highlight which ones are free.”
+  2. “Create OSDs on each free disk of server 3.”
+  Ask the assistant to surface any failures so you can rerun only the problematic disks.
+
+- **Analyse the reason for my Ceph health warning**
+  Prompt sequence:
+  1. “Fetch the detailed cluster status and explain which checks are in WARN state.”
+  2. “Search VictoriaLogs for related WARN or ERROR entries in the last six hours and tell me the key error messages.”
+  Follow up with targeted prompts such as “Filter the log results to ceph-mon services only” or “Show me the latest slow OSD requests.”
+
 #### Log Intelligence
 If `croit_log_tools.py` is available, `croit_log_search` and `croit_log_check` expose VictoriaLogs directly with:
 - Intent parsing for common Ceph trouble patterns
