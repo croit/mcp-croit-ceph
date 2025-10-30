@@ -1,226 +1,370 @@
 # MCP Croit Ceph
 
-MCP server that exposes the Croit Ceph REST API (and VictoriaLogs) to Model Context Protocol clients with built-in token optimization and tool generation.
+An MCP (Model Context Protocol) server for interacting with Croit Ceph clusters through their REST API.
 
----
+## Features
 
-## Use the Tool
+### Automatic Token Optimization
 
-### Client Integrations (Copy & Paste)
+The MCP server automatically optimizes responses to reduce token consumption:
+- **Auto-limits**: Adds default limits (10-100 items) to list operations
+- **Smart truncation**: Large responses automatically truncated with metadata
+- **Optimization hints**: Tool descriptions include token-saving tips
+- **Response metadata**: Truncated responses include info on how to get more data
 
-#### Claude Desktop
-Add the server to `~/.config/Claude/claude_desktop_config.json` (adjust paths, secrets, and image tag as needed):
+Example: Instead of 500 services (50,000 tokens), you get 25 services + metadata (2,500 tokens)
 
-```json
-{
-  "mcpServers": {
-    "mcp-croit-ceph": {
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i", "--net=host",
-        "-e", "USE_INCLUDED_API_SPEC=1",
-        "-e", "CROIT_HOST=https://your-croit-management-node:8080",
-        "-e", "CROIT_API_TOKEN=REPLACE_WITH_TOKEN",
-        "croit/mcp-croit-ceph:latest"
-      ]
-    }
-  }
-}
+### Built-in Filtering (grep-like search)
+
+Filter API responses locally without multiple calls:
+- **Field filtering**: `_filter_status='error'` - exact match
+- **Regex patterns**: `_filter_name='~ceph.*'` - pattern matching
+- **Numeric comparisons**: `_filter_size='>1000'` - greater than
+- **Text search**: `_filter__text='timeout'` - search all text fields
+- **Field existence**: `_filter__has='error_message'` - has field
+- **Multiple values**: `_filter_status=['error','warning']` - OR logic
+
+Example: Find errors in 500 services with one call:
+```
+_filter_status='error' → Returns only 5 error services (99% token savings)
 ```
 
-#### Claude Code
-Claude Code reads MCP servers from `~/.config/Claude/claude_code_config.json`. Reuse the same command/args block:
+### Intelligent Tool Organization
 
-```json
-{
-  "mcpServers": {
-    "mcp-croit-ceph": {
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i", "--net=host",
-        "-e", "USE_INCLUDED_API_SPEC=1",
-        "-e", "CROIT_HOST=https://your-croit-management-node:8080",
-        "-e", "CROIT_API_TOKEN=REPLACE_WITH_TOKEN",
-        "croit/mcp-croit-ceph:latest"
-      ]
-    }
-  }
-}
+The MCP server provides a streamlined set of tools for efficient cluster management:
+- **Base tools** for direct API access
+- **Category tools** for common operations (services, maintenance, s3, pools, etc.)
+- **Advanced log search** with VictoriaLogs integration
+
+### Dynamic Features
+
+- **Automatic API Discovery**: Fetches OpenAPI spec from your Croit cluster
+- **Permission-Based Filtering**: Role-based tool filtering (ADMIN vs VIEWER)
+- **Full x-llm-hints Support**: 575+ endpoints with AI optimization hints
+- **Local OpenAPI Support**: Use a local OpenAPI spec file for testing/development
+- **Schema Resolution**: Handles `$ref` references automatically
+
+### Advanced x-llm-hints Integration
+
+The MCP server fully integrates Croit's x-llm-hints into tool descriptions for optimal LLM guidance:
+
+**What x-llm-hints provide:**
+- **Purpose**: Clear description of what each endpoint does
+- **Usage examples**: Common use cases and workflow guidance
+- **Failure modes**: Expected errors and how to handle them
+- **Rate limits**: API throttling information for efficient usage
+- **Retry strategies**: How to handle transient failures
+- **Poll intervals**: Recommended refresh rates for live data
+- **Cache hints**: Response caching strategies
+- **Related endpoints**: Cross-references for complex workflows
+
+**Examples of integrated hints:**
+```
+manage_cluster tool:
+Purpose: Bootstrap a brand-new Ceph cluster using the selected MON disk and IP address.
+
+Common usage:
+• Invoke immediately after fetching candidates from GET /cluster/create/mons
+• Monitor the returned ManagedTask via /tasks/{id} until bootstrap completes
+
+Failure modes:
+• 400: Validate disk/server eligibility via GET /cluster/create/mons
+• 409: If concurrent bootstrap is in progress, wait for existing task
+
+Rate limits: 60/300s, 30/300s
+Retry strategy: manual_retry, exponential_backoff
 ```
 
-#### Codex CLI
-To use the server inside the Codex CLI, add it to `~/.config/codex/mcp_servers.json`:
+**Benefits for LLMs:**
+- **Context-aware operations**: LLMs understand when and how to use each tool
+- **Error handling**: Proactive guidance on handling API errors
+- **Performance optimization**: Built-in rate limiting and caching awareness
+- **Workflow intelligence**: Understanding of multi-step operations
 
-```json
-{
-  "mcpServers": {
-    "croit-ceph": {
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i", "--net=host",
-        "-e", "USE_INCLUDED_API_SPEC=1",
-        "-e", "CROIT_HOST=https://your-croit-management-node:8080",
-        "-e", "CROIT_API_TOKEN=REPLACE_WITH_TOKEN",
-        "croit/mcp-croit-ceph:latest"
-      ]
-    }
-  }
-}
-```
+## Installation
 
-#### Gemini Advanced Code Assist
-Gemini’s MCP bridge uses `~/.config/google/gemini/mcp_servers.json`. Register the server with the same command:
+⚠️ **IMPORTANT**: This project requires a virtual environment due to system-managed Python environments.
 
-```json
-{
-  "servers": {
-    "croit-ceph": {
-      "command": "docker",
-      "args": [
-        "run", "--rm", "-i", "--net=host",
-        "-e", "USE_INCLUDED_API_SPEC=1",
-        "-e", "CROIT_HOST=https://your-croit-management-node:8080",
-        "-e", "CROIT_API_TOKEN=REPLACE_WITH_TOKEN",
-        "croit/mcp-croit-ceph:latest"
-      ]
-    }
-  }
-}
-```
-
-Configuration file locations can vary between releases—if your client cannot see the server, check its MCP documentation and point it at the same Docker (or Python) command shown above. Remove `USE_INCLUDED_API_SPEC=1` if you prefer the server to fetch the live spec from `CROIT_HOST`, or provide your own JSON via `OPENAPI_FILE=/path/to/spec.json`.
-
-#### What You Need
-- A reachable Croit Ceph cluster (`CROIT_HOST`)
-- An API token with suitable permissions (`CROIT_API_TOKEN`)
-- Optional: a cached OpenAPI document (`openapi.json`) for offline or repeatable startup
-
-The server reads configuration from environment variables first and falls back to `/config/config.json`:
-
-```json
-{
-  "host": "https://your-croit-cluster.example:8080",
-  "api_token": "xxxxxx"
-}
-```
-
-By default the MCP server downloads the latest OpenAPI spec from `CROIT_HOST`. Set `USE_INCLUDED_API_SPEC=1` (or pass `--use-included-api-spec`) to load the enhanced spec bundled with this project instead.
-
-### Tooling at Runtime
-- **Hybrid mode (default):** ~13 tools combining discovery (`list_endpoints`, `call_endpoint`, `get_schema`) with curated categories (services, pools, maintenance, etc.).
-- **Base only:** Minimal surface using the three base tools.
-- **Categories only:** Just the curated categories for a guided experience.
-- **Endpoints as tools:** One MCP tool per REST endpoint (legacy, heavy).
-
-Token optimization features automatically add pagination defaults, truncate large payloads with metadata, and support server-side filtering parameters such as `_filter_status`, `_filter__text`, numeric comparisons, and regex matching.
-
-### Usage Examples
-- **Check my Ceph cluster**
-  Prompt the assistant:
-  > “Summarise any warnings or degraded services of my Ceph cluster for me.”
-  Follow-up prompt ideas: “If the health is degraded, list the checks and link to suggested remediation.”
-
-- **Install the first monitor on the 10 GB disk of server 1**
-  Prompt sequence:
-  1. “List MON deployment candidates and show disks mapped to server 1.”
-  2. “Use the selected disk to run the cluster deploy action and return the task id so I can follow progress.”
-  Encourage the assistant to monitor `/tasks/{id}` until the bootstrap finishes.
-
-- **Deploy OSDs on every free drive of server 3**
-  Prompt sequence:
-  1. “Show me the disks on server 3 and highlight which ones are free.”
-  2. “Create OSDs on each free disk of server 3.”
-  Ask the assistant to surface any failures so you can rerun only the problematic disks.
-
-- **Analyse the reason for my Ceph health warning**
-  Prompt sequence:
-  1. “Fetch the detailed cluster status and explain which checks are in WARN state.”
-  2. “Search VictoriaLogs for related WARN or ERROR entries in the last six hours and tell me the key error messages.”
-  Follow up with targeted prompts such as “Filter the log results to ceph-mon services only” or “Show me the latest slow OSD requests.”
-
-#### Log Intelligence
-If `croit_log_tools.py` is available, `croit_log_search` and `croit_log_check` expose VictoriaLogs directly with:
-- Intent parsing for common Ceph trouble patterns
-- Direct JSON query support (`_and`, `_or`, `_regex`, `_exists`, ...)
-- Smart summaries: priority breakdowns, critical event extraction, server activity, recommendations
-
----
-
-## Develop the Tool
-
-### Repository Layout
-- `mcp-croit-ceph.py` – main server, tool generation, configuration loading.
-- `token_optimizer.py` – applies default limits, truncation, field filtering, and summaries.
-- `croit_log_tools.py` – VictoriaLogs WebSocket client, intent parser, templates, response summariser.
-- `ARCHITECTURE.md` – system design deep dive.
-- `Dockerfile` / `build.sh` – container build assets.
-
-### Local Development Workflow
 ```bash
-python3 -m venv venv
-source venv/bin/activate          # Windows: venv\Scripts\activate
-pip install -r requirements.txt
+# Clone the repository
+git clone https://github.com/croit/mcp-croit-ceph.git
+cd mcp-croit-ceph
 
-export CROIT_HOST="https://dev-cluster"
-export CROIT_API_TOKEN="dev-token"
+# Create and activate virtual environment (REQUIRED)
+python3 -m venv venv
+source venv/bin/activate  # Linux/Mac
+# or: venv\Scripts\activate  # Windows
+
+# Install dependencies in virtual environment
+pip install -r requirements.txt
+```
+
+**Note**: Always activate the virtual environment (`source venv/bin/activate`) before running any Python commands or tests.
+
+## Configuration
+
+Set up your environment variables:
+
+```bash
+export CROIT_HOST="https://your-croit-cluster.com"
+export CROIT_API_TOKEN="your-api-token"
+```
+
+Or use a config file at `/config/config.json`:
+
+```json
+{
+  "host": "https://your-croit-cluster.com",
+  "api_token": "your-api-token"
+}
+```
+
+## Usage
+
+### Basic Usage
+
+```bash
+# Activate virtual environment first (REQUIRED)
+source venv/bin/activate
+
+# Run with default configuration
+python mcp-croit-ceph.py
+```
+
+### Advanced Options
+
+```bash
+# Activate virtual environment first (REQUIRED)
+source venv/bin/activate
+
+# Use local OpenAPI spec file
+python mcp-croit-ceph.py --openapi-file openapi.json
+
+# Skip permission checking (faster startup)
+python mcp-croit-ceph.py --no-permission-check
+
+# Customize category tool limits
+python mcp-croit-ceph.py --max-category-tools 5
+```
+
+## Available Tools
+
+The MCP server provides a comprehensive set of tools:
+
+**Base Tools:**
+- `list_endpoints` - Search and filter API endpoints with smart prioritization
+- `call_endpoint` - Direct API calls to any endpoint with token optimization
+- `get_schema` - Resolve schema references
+
+**Category Tools:**
+- `manage_services` - Ceph services operations
+- `manage_maintenance` - Maintenance tasks
+- `manage_s3` - S3 bucket management
+- `manage_pools` - Storage pool operations
+- `manage_servers` - Server management
+- And more dynamically generated based on your cluster's API
+
+**Log Search Tools:**
+- `croit_log_search` - Advanced log analysis with VictoriaLogs
+- `croit_log_check` - Instant log condition checking
+
+Each category tool supports actions like: `list`, `get`, `create`, `update`, `delete`
+
+## Permission-Based Filtering
+
+The server intelligently filters tools based on the API token's role:
+
+1. **Automatic Role Detection**: Fetches roles via `/auth/token-info` endpoint
+2. **Role-Based Access**:
+   - **ADMIN role**: Full access to all categories
+   - **VIEWER/other roles**: All categories except admin-only operations
+   - **Invalid token**: Server will exit with error (no access)
+
+### Category Access Control
+
+**Admin-Only Categories:**
+- `maintenance`, `servers`, `ipmi` - System management
+- `config`, `hooks`, `change-requests` - Configuration changes
+- `config-templates` - Template management
+
+**All Other Categories** are accessible to VIEWER roles for read operations:
+- `cluster`, `status`, `stats` - Monitoring
+- `logs`, `disks`, `services` - Information viewing
+- `s3`, `cephfs`, `rbds`, `pools` - Storage info
+- `authentication`, `images`, `daos` - Read operations
+- And all others not listed as admin-only
+
+This role-based approach is fast and ensures users only see tools they can actually use.
+
+## Using Local OpenAPI Spec
+
+For offline development or testing:
+
+```bash
+# Download spec from your cluster
+curl -H "Authorization: Bearer $CROIT_API_TOKEN" \
+     https://your-cluster/api/swagger.json > openapi.json
+
+# Use the local file
+python mcp-croit-ceph.py --openapi-file openapi.json
+```
+
+## MCP Integration
+
+### With Claude Desktop
+
+Add to your Claude Desktop config:
+
+```json
+{
+  "mcpServers": {
+    "croit-ceph": {
+      "command": "python",
+      "args": ["/path/to/mcp-croit-ceph.py"],
+      "env": {
+        "CROIT_HOST": "https://your-cluster",
+        "CROIT_API_TOKEN": "your-token"
+      }
+    }
+  }
+}
+```
+
+### Docker Integration for LLMs
+
+For integration with LLM systems, use the Docker container with local OpenAPI spec:
+
+```json
+{
+  "mcpServers": {
+    "mcp-croit-ceph": {
+      "command": "docker",
+      "args": [
+        "run",
+        "--rm",
+        "-i",
+        "-v",
+        "/path/to/openapi.json:/config/openapi.json:ro",
+        "-e",
+        "OPENAPI_FILE=/config/openapi.json",
+        "-e",
+        "CROIT_HOST=http://your-cluster:8080",
+        "-e",
+        "CROIT_API_TOKEN=your-api-token",
+        "mcp-croit-ceph:latest"
+      ]
+    }
+  }
+}
+```
+
+This approach:
+- Uses a local OpenAPI spec for faster startup
+- Avoids network calls during initialization
+- Provides consistent tool definitions
+- Ideal for production deployments
+
+### With Other MCP Clients
+
+The server implements the standard MCP protocol and works with any compatible client.
+
+## Command Line Arguments
+
+| Argument | Description | Default |
+|----------|-------------|---------|
+| `--openapi-file` | Local OpenAPI spec file | None (fetch from server) |
+| `--no-permission-check` | Skip permission checking | False (check enabled) |
+| `--max-category-tools` | Max category tools to generate | 10 |
+| `--no-resolve-references` | Don't resolve $ref in spec | False (resolve enabled) |
+
+## Docker Usage
+
+### Build and Run with Docker
+
+```bash
+# Build the Docker image
+docker build -t mcp-croit-ceph .
+
+# Run with environment variables
+docker run -it --rm \
+  -e CROIT_HOST="https://your-cluster" \
+  -e CROIT_API_TOKEN="your-token" \
+  mcp-croit-ceph
+
+# Run with local OpenAPI spec (for testing)
+docker run -it --rm \
+  -v $(pwd)/openapi.json:/config/openapi.json:ro \
+  -e CROIT_HOST="http://dummy" \
+  -e CROIT_API_TOKEN="dummy" \
+  mcp-croit-ceph \
+  --openapi-file /config/openapi.json --no-permission-check
+```
+
+### Docker Compose
+
+```yaml
+version: '3.8'
+services:
+  mcp-croit-ceph:
+    image: mcp-croit-ceph:latest
+    environment:
+      CROIT_HOST: "${CROIT_HOST}"
+      CROIT_API_TOKEN: "${CROIT_API_TOKEN}"
+    volumes:
+      # Optional: Use local OpenAPI spec
+      - ./openapi.json:/config/openapi.json:ro
+```
+
+## Development
+
+⚠️ **Remember**: Always activate the virtual environment before development work:
+```bash
+source venv/bin/activate
+```
+
+
+### Debug Logging
+
+```bash
+# Activate virtual environment first
+source venv/bin/activate
+
+# Enable debug logging
+export LOG_LEVEL=DEBUG
+python mcp-croit-ceph.py
+```
+
+### Testing with Local OpenAPI Spec
+
+```bash
+# Activate virtual environment first
+source venv/bin/activate
+
+# Use the test script
+./test-local.sh
+
+# Or manually test
 python mcp-croit-ceph.py --openapi-file openapi.json --no-permission-check
 ```
 
-- Helpful switches:
-  - `--mode {hybrid,base_only,categories_only,endpoints_as_tools}`
-  - `--openapi-file PATH` to reuse a local spec
-  - `--use-included-api-spec` to force the bundled spec without setting env vars
-  - `--no-permission-check` to skip role discovery when testing
-  - `--max-category-tools N` to cap category fan-out
-- Toggle debug output with `LOG_LEVEL=DEBUG`.
-- To test against recorded specs, drop them in `openapi.json` or mount via Docker.
+### Running Tests
 
-### Standalone Docker (local testing)
 ```bash
-docker run --rm -it \
-  -e CROIT_HOST="https://your-cluster" \
-  -e CROIT_API_TOKEN="your-token" \
-  croit/mcp-croit-ceph:latest
+# Activate virtual environment first
+source venv/bin/activate
+
+# Run timestamp fix test
+python test_timestamp_fix.py
+
+# Run other tests (ensure dependencies are installed in venv)
+python test_actual_mcp.py
 ```
 
-Add `-e USE_INCLUDED_API_SPEC=1` if you want to exercise the bundled spec without touching the cluster.
+## License
 
-#### Local Spec + Host Network example
-Ideal when you want the enhanced spec shipped with the container and need to reach services on localhost:
-```bash
-docker run --rm -it \
-  --net=host \
-  -e USE_INCLUDED_API_SPEC=1 \
-  -e CROIT_HOST="https://your-croit-management-node:8080" \
-  -e CROIT_API_TOKEN="REPLACE_WITH_TOKEN" \
-  croit/mcp-croit-ceph:latest
-```
+Apache 2.0
 
-### Testing & Tooling
-- Targeted scripts: `python test_timestamp_fix.py`, `python test_actual_mcp.py`.
-- Measure tool counts quickly:
-  ```bash
-  for mode in hybrid base_only categories_only; do
-    python mcp-croit-ceph.py --mode "$mode" --openapi-file openapi.json --no-permission-check \
-      2>&1 | grep -o 'Generated [0-9]* tools'
-  done
-  ```
-- Docker build for release:
-  ```bash
-  docker build -t mcp-croit-ceph:latest .
-  docker tag mcp-croit-ceph:latest croit/mcp-croit-ceph
-  ```
+## Support
 
-### Contributing Tips
-- Always work in a virtual environment; system Python is managed.
-- Keep changes ASCII unless a file already uses other encodings.
-- Architecture and x-llm-hints behaviour are documented in `ARCHITECTURE.md`—skim it before large changes.
-- When adding endpoints or categories, consider performance impact (token optimizer limits, log tools availability).
-
----
-
-## Reference
-- License: Apache 2.0 (`LICENSE`)
-- MCP registry metadata: `server.json`
-- Need implementation details? Start with `ARCHITECTURE.md`.
-- Support: file an issue in this repository or reach out to Croit support for cluster-specific questions.
+For issues specific to this MCP server, please open an issue in this repository.
+For Croit-specific questions, contact Croit support.

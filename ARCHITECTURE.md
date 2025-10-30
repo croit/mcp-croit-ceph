@@ -1,395 +1,366 @@
-# Croit MCP Server - Architecture Documentation
+# MCP Croit Ceph - System Architecture
+
+## Documentation Structure
+
+This file provides a high-level overview of the system architecture. Detailed component documentation is located in the **docs/** subfolder.
+
+**For LLMs**: When investigating specific components, workflows, or design patterns, read the corresponding `docs/ARCHITECTURE.<topic>.md` files referenced throughout this document.
 
 ## System Overview
 
+The MCP Croit Ceph server is a Model Context Protocol (MCP) implementation that provides LLM-driven access to Croit Ceph cluster management. The system dynamically generates tools from OpenAPI specifications and implements advanced log search capabilities via VictoriaLogs.
+
 ```
-┌─────────────────┐     ┌──────────────────┐     ┌─────────────────┐
-│   LLM Client    │────▶│   MCP Server     │────▶│  Croit Cluster  │
-│    (Claude)     │◀────│ (mcp-croit-ceph) │◀────│   API + Logs    │
-└─────────────────┘     └──────────────────┘     └─────────────────┘
-                               │
-                    ┌──────────┴──────────┐
-                    │                     │
-            ┌───────▼────────┐   ┌───────▼────────┐
-            │  API Handler   │   │  Log Handler   │
-            │  (OpenAPI)     │   │  (WebSocket)   │
-            └────────────────┘   └────────────────┘
+┌─────────────┐     ┌──────────────────┐     ┌─────────────────┐
+│ LLM Client  │────▶│   MCP Server     │────▶│ Croit Cluster   │
+│  (Claude)   │◀────│ (This System)    │◀────│ API + Logs      │
+└─────────────┘     └──────────────────┘     └─────────────────┘
+                            │
+                    ┌───────┴────────┐
+                    │                │
+            ┌───────▼──────┐  ┌──────▼───────┐
+            │  API Tools   │  │  Log Search  │
+            │  Generation  │  │  System      │
+            └──────────────┘  └──────────────┘
 ```
+
+**Key Metrics:**
+- 3 Python modules (5,296 total lines)
+- 580+ API endpoints dynamically discovered
+- 23 architecture components
+- 3 operational modes (hybrid/base_only/categories_only)
+
+## Architectural Principles
+
+This system follows:
+- **SoC (Separation of Concerns)**: Clear module boundaries between MCP protocol, API handling, log search
+- **DDD (Domain-Driven Design)**: Category-based organization mirrors Ceph operational domains
+- **DRY (Don't Repeat Yourself)**: Shared TokenOptimizer, reusable schema resolution
+- **KISS (Keep It Simple, Stupid)**: Direct VictoriaLogs queries without translation layers
 
 ## Core Components
 
-### 1. Main Server (`mcp-croit-ceph.py`)
+### 1. MCP Server Core
+Central coordination component implementing Model Context Protocol.
+📄 See: [docs/ARCHITECTURE.mcp-server-core.md](docs/ARCHITECTURE.mcp-server-core.md)
 
-**Class: CroitCephServer**
-- Dynamically loads OpenAPI spec from Croit cluster
-- Generates MCP tools from API endpoints
-- Handles authentication and API calls
-- Manages different operating modes
+**Key Responsibilities:**
+- MCP protocol handler registration
+- Tool listing and invocation routing
+- Session lifecycle management
+- Mode-based tool handler selection
 
-**Key Features:**
-- **Dynamic tool generation** from OpenAPI spec with full x-llm-hints
-- **Smart search prioritization** - Most relevant endpoints first
-- **Intent-based filtering** - read/write/manage operations
-- **Feature flags** - Disable DAOS/specialty tools to reduce token usage
-- **Direct VictoriaLogs integration** - No translation layer
-- **Real-time log streaming** with proper WebSocket authentication
-- **Comprehensive error handling** and MCP protocol compliance
-- **Token optimization** - Up to 90% reduction in common searches
+### 2. Tool Generation Engine
+Dynamic tool creation from OpenAPI specifications.
+📄 See: [docs/ARCHITECTURE.tool-generation-engine.md](docs/ARCHITECTURE.tool-generation-engine.md)
 
-### 2. Token Optimizer (`token_optimizer.py`)
+**Key Responsibilities:**
+- OpenAPI spec parsing and analysis
+- Three-mode tool generation (hybrid/base_only/categories_only)
+- x-llm-hints integration
+- Category-based endpoint grouping
 
-**Purpose:** Reduces token usage by filtering and truncating responses
+### 3. Token Optimizer
+Performance-critical component reducing LLM token consumption.
+📄 See: [docs/ARCHITECTURE.token-optimizer.md](docs/ARCHITECTURE.token-optimizer.md)
 
-**Optimization Strategies:**
-- Automatic pagination limits
-- Response truncation for large datasets
-- Field filtering for verbose responses
-- Smart defaults for common queries
+**Key Responsibilities:**
+- Response truncation with metadata
+- grep-like filtering (regex, numeric, field existence)
+- Field selection for verbose responses
+- Default pagination limits
 
-**Key Methods:**
-- `should_optimize(url, method)`: Determines if optimization needed
-- `add_default_limit(params)`: Adds reasonable limits
-- `truncate_response(data)`: Limits response size
-- `apply_filters(data, filters)`: Applies user filters
+### 4. Log Search System
+Advanced log analysis with VictoriaLogs integration.
+📄 See: [docs/ARCHITECTURE.log-search-system.md](docs/ARCHITECTURE.log-search-system.md)
 
-### 3. Log Search Tools (`croit_log_tools.py`)
+**Key Responsibilities:**
+- Natural language intent parsing
+- Direct VictoriaLogs JSON query execution
+- WebSocket streaming with binary auth
+- HTTP export fallback mechanism
+- Log summarization and critical event extraction
 
-**Revolutionary Direct VictoriaLogs Integration:**
+### 5. API Client
+HTTP/HTTPS communication layer for Croit cluster interaction.
+📄 See: [ARCHITECTURE.api-client.md](docs/ARCHITECTURE.api-client.md)
 
-#### Direct JSON Query Interface
-- **No translation layer** - LLM writes VictoriaLogs JSON directly
-- **Full VictoriaLogs power** - All operators and fields supported
-- **Binary WebSocket authentication** - Correct Croit protocol implementation
-- **Control message handling** - "empty", "too_wide", "hits:", "error:" responses
-
-#### Comprehensive Operator Support
-- **String operators:** `_eq`, `_contains`, `_starts_with`, `_ends_with`, `_regex`
-- **Numeric operators:** `_eq`, `_neq`, `_gt`, `_gte`, `_lt`, `_lte`
-- **List operators:** `_in`, `_nin`
-- **Logical operators:** `_and`, `_or`, `_not`
-- **Existence operators:** `_exists`, `_missing`
-
-#### Complete Field Coverage
-- **Core fields:** `_SYSTEMD_UNIT`, `PRIORITY`, `CROIT_SERVER_ID`, `MESSAGE`
-- **Transport:** `_TRANSPORT` (kernel/syslog/journal)
-- **System fields:** `_HOSTNAME`, `_MACHINE_ID`, `SYSLOG_IDENTIFIER`, `THREAD`
-- **Search:** `_search` for full-text search
-
-## Data Flow
-
-### API Calls
-```
-1. LLM invokes tool with arguments
-2. Server validates and builds request
-3. Token optimizer adds limits
-4. HTTPS request to Croit API
-5. Response filtering and truncation
-6. Return structured result to LLM
-```
-
-### Log Searches (Direct VictoriaLogs)
-```
-1. LLM provides VictoriaLogs JSON query directly
-2. Server adds current time context automatically
-3. WebSocket connection with binary auth token
-4. Query sent as structured JSON to Croit
-5. Control messages handled ("empty", "too_wide", etc.)
-6. Log entries and metadata returned
-7. Debug info shows exact query sent
-```
-
-## Operating Modes
-
-### Hybrid Mode (Default)
-```python
-mode="hybrid"
-```
-- Base tools (list, call, schema)
-- Category-specific tools
-- Best balance of flexibility and organization
-
-### Base Only Mode
-```python
-mode="base_only"
-```
-- Minimal tool set
-- Maximum flexibility
-- Direct API endpoint access
-
-### Categories Only Mode
-```python
-mode="categories_only"
-```
-- Organized by functional area
-- Easier discovery
-- More guided experience
-
-### Endpoints as Tools Mode
-```python
-mode="endpoints_as_tools"
-```
-- Every endpoint becomes a tool
-- Maximum granularity
-- Can be overwhelming
-
-## Authentication
-
-### API Token
-```bash
---api-token YOUR_TOKEN
-```
+**Key Responsibilities:**
 - Bearer token authentication
-- Passed in Authorization header
-- Required for all API calls
+- SSL verification management
+- Request/response handling
+- Error propagation
 
-### Environment Variables
-```bash
-CROIT_API_TOKEN=your_token
-CROIT_HOST=cluster.example.com:8080
+### 6. Schema Resolver
+OpenAPI $ref resolution and JSON schema conversion.
+📄 See: [ARCHITECTURE.schema-resolver.md](docs/ARCHITECTURE.schema-resolver.md)
+
+**Key Responsibilities:**
+- Recursive $ref resolution
+- OpenAPI to JSON Schema conversion
+- Pagination request schema special handling
+- Property extraction from nested schemas
+
+### 7. Configuration Manager
+Multi-source configuration loading and validation.
+📄 See: [ARCHITECTURE.configuration-manager.md](docs/ARCHITECTURE.configuration-manager.md)
+
+**Key Responsibilities:**
+- Environment variable parsing
+- Config file loading
+- Local vs bundled OpenAPI spec selection
+- Feature flag management
+
+## Functional Modules
+
+### Permission-Based Filtering
+Role-based access control for tools.
+📄 See: [ARCHITECTURE.permission-based-filtering.md](docs/ARCHITECTURE.permission-based-filtering.md)
+
+### Response Filtering
+grep-like filtering system with advanced operators.
+📄 See: [ARCHITECTURE.response-filtering.md](docs/ARCHITECTURE.response-filtering.md)
+
+### Category Mapping
+Domain-based endpoint organization.
+📄 See: [ARCHITECTURE.category-mapping.md](docs/ARCHITECTURE.category-mapping.md)
+
+### Intent Parsing
+Natural language to structured query conversion.
+📄 See: [ARCHITECTURE.intent-parsing.md](docs/ARCHITECTURE.intent-parsing.md)
+
+### Service Name Translation
+Ceph service name normalization.
+📄 See: [ARCHITECTURE.service-name-translation.md](docs/ARCHITECTURE.service-name-translation.md)
+
+## Workflows & Processes
+
+### Server Initialization Flow
+Multi-stage bootstrap sequence.
+📄 See: [ARCHITECTURE.server-initialization-flow.md](docs/ARCHITECTURE.server-initialization-flow.md)
+
+### Tool Generation Workflow
+Mode-specific tool creation strategies.
+📄 See: [ARCHITECTURE.tool-generation-workflow.md](docs/ARCHITECTURE.tool-generation-workflow.md)
+
+### API Request Execution
+Full lifecycle from invocation to optimized response.
+📄 See: [ARCHITECTURE.api-request-execution.md](docs/ARCHITECTURE.api-request-execution.md)
+
+### Log Search Execution
+Dual-path log query execution with optimization.
+📄 See: [ARCHITECTURE.log-search-execution.md](docs/ARCHITECTURE.log-search-execution.md)
+
+### OpenAPI Spec Resolution
+Multi-step reference resolution process.
+📄 See: [ARCHITECTURE.openapi-spec-resolution.md](docs/ARCHITECTURE.openapi-spec-resolution.md)
+
+## Integration Points
+
+### VictoriaLogs WebSocket Protocol
+Binary authentication and streaming log integration.
+📄 See: [ARCHITECTURE.victorialogs-websocket-protocol.md](docs/ARCHITECTURE.victorialogs-websocket-protocol.md)
+
+### Croit API REST Interface
+Primary cluster communication channel.
+📄 See: [ARCHITECTURE.croit-api-rest-interface.md](docs/ARCHITECTURE.croit-api-rest-interface.md)
+
+### MCP Protocol Handlers
+Standard Model Context Protocol implementation.
+📄 See: [ARCHITECTURE.mcp-protocol-handlers.md](docs/ARCHITECTURE.mcp-protocol-handlers.md)
+
+## Design Patterns
+
+### Strategy Pattern: Tool Modes
+Three operational strategies for tool generation.
+📄 See: [ARCHITECTURE.strategy-pattern-tool-modes.md](docs/ARCHITECTURE.strategy-pattern-tool-modes.md)
+
+### Builder Pattern: LogsQL
+Structured query construction from intents.
+📄 See: [ARCHITECTURE.builder-pattern-logsql.md](docs/ARCHITECTURE.builder-pattern-logsql.md)
+
+### Adapter Pattern: OpenAPI
+OpenAPI to MCP tool definition adaptation.
+📄 See: [ARCHITECTURE.adapter-pattern-openapi.md](docs/ARCHITECTURE.adapter-pattern-openapi.md)
+
+### Template Method: API Calls
+Common execution structure with customization points.
+📄 See: [ARCHITECTURE.template-method-api-calls.md](docs/ARCHITECTURE.template-method-api-calls.md)
+
+## Utilities & Helpers
+
+### Ceph Debug Templates
+Pre-built query templates for common scenarios.
+📄 See: [ARCHITECTURE.ceph-debug-templates.md](docs/ARCHITECTURE.ceph-debug-templates.md)
+
+### Server ID Detector
+Automatic server discovery from logs.
+📄 See: [ARCHITECTURE.server-id-detector.md](docs/ARCHITECTURE.server-id-detector.md)
+
+### Log Transport Analyzer
+Kernel log availability analysis.
+📄 See: [ARCHITECTURE.log-transport-analyzer.md](docs/ARCHITECTURE.log-transport-analyzer.md)
+
+### Log Summary Engine
+Priority breakdown and critical event extraction.
+📄 See: [ARCHITECTURE.log-summary-engine.md](docs/ARCHITECTURE.log-summary-engine.md)
+
+## Data Flow Diagrams
+
+### API Call Flow
+```
+LLM Request → Tool Invocation → Schema Validation →
+  → Token Optimization → HTTP Request → Croit API →
+  → Response Filtering → Token Optimization → LLM Response
 ```
 
-## WebSocket Protocol
-
-### Connection
-```python
-ws://host:8080/api/logs
-Headers: {
-    "Authorization": "Bearer TOKEN"
-}
+### Log Search Flow
+```
+LLM Query → Intent Parsing → LogsQL Building →
+  → WebSocket Connection (or HTTP fallback) →
+  → VictoriaLogs → Stream Processing →
+  → Summarization → LLM Response
 ```
 
-### Message Format
-```json
-{
-  "type": "query|tail",
-  "query": {
-    "where": "LogsQL filter",
-    "limit": 1000
-  },
-  "start": "ISO8601",
-  "end": "ISO8601"
-}
+### Tool Generation Flow
+```
+Server Init → OpenAPI Fetch/Load → Schema Resolution →
+  → Category Analysis → Permission Filtering →
+  → Mode Selection (hybrid/base/categories) →
+  → Tool Definition Creation → MCP Registration
 ```
 
-### Response Stream
-```json
-{
-  "timestamp": "2024-01-01T12:00:00Z",
-  "message": "Log message",
-  "level": "ERROR",
-  "service": "ceph-osd",
-  "host": "node1",
-  "metadata": {}
-}
+## File Organization
+
+### Module Structure
+```
+mcp-croit-ceph.py (2,212 lines)
+├── CroitCephServer class
+│   ├── Configuration (3 methods)
+│   ├── OpenAPI handling (4 methods)
+│   ├── Schema resolution (3 methods)
+│   ├── API structure analysis (3 methods)
+│   ├── Tool generation (6 methods)
+│   ├── Tool handlers (6 methods)
+│   └── Utility methods (4 methods)
+└── main() entrypoint
+
+token_optimizer.py (423 lines)
+└── TokenOptimizer class
+    ├── Truncation methods (2)
+    ├── Filtering methods (6)
+    ├── Summary generation (1)
+    └── Utility methods (3)
+
+croit_log_tools.py (2,661 lines)
+├── LogSearchIntentParser (2 methods)
+├── LogsQLBuilder (1 method)
+├── CroitLogSearchClient (35+ methods)
+├── CephServiceTranslator (5 methods)
+├── CephDebugTemplates (2 methods)
+├── ServerIDDetector (4 methods)
+├── LogTransportAnalyzer (3 methods)
+├── LogSummaryEngine (5 methods)
+└── Handler functions (3)
 ```
 
-## Caching Strategy
+## Dependencies
 
-### Query Cache
-- 5-minute TTL for identical queries
-- MD5 hash for cache keys
-- Automatic invalidation on errors
+**External Libraries:**
+- `mcp`: Model Context Protocol server implementation
+- `aiohttp`: Async HTTP client for API calls
+- `websockets`: WebSocket client for log streaming
+- `requests`: Sync HTTP for OpenAPI spec fetching
 
-### Results Cache
-- In-memory storage
-- Limited to recent queries
-- Cleared on connection errors
+**Internal Coupling:**
+- mcp-croit-ceph.py imports: token_optimizer, croit_log_tools (optional)
+- token_optimizer.py: standalone, no internal imports
+- croit_log_tools.py: standalone, no internal imports
 
-## Error Handling
+## Performance Characteristics
 
-### Graceful Degradation
-```
-WebSocket Failed → HTTP Fallback
-HTTP Failed → Cached Results
-Cache Miss → Error with context
-```
+**Token Optimization Impact:**
+- Default pagination: 90%+ token reduction on list operations
+- Response truncation: Configurable limits (25-100 items)
+- Field filtering: 50-70% reduction for verbose responses
+- Hint suppression: 30-40% reduction on repeated list_endpoints calls
 
-### Retry Logic
-- WebSocket: No retry, immediate fallback
-- HTTP: Single retry with backoff
-- Cache: Always check before external call
+**Caching:**
+- OpenAPI spec: In-memory, full application lifecycle
+- Log search: 5-minute response cache per query hash
 
-## Performance Optimizations
-
-### Query Optimization
-1. Time filters applied first
-2. Service-specific indexes used
-3. Limit parameters added automatically
-4. Selective field retrieval
-
-### Response Optimization
-1. Pagination with reasonable defaults
-2. Field filtering for large objects
-3. Response truncation at 30KB
-4. Streaming for large datasets
-
-## Pattern Detection Algorithms
-
-### Error Clustering
-```python
-1. Normalize messages (remove numbers, IDs)
-2. Group by similarity threshold
-3. Count occurrences
-4. Identify top patterns
-```
-
-### Burst Detection
-```python
-1. Group logs by time window (1 minute)
-2. Calculate volume per window
-3. Identify statistical outliers
-4. Mark as burst if > threshold
-```
-
-### Correlation Analysis
-```python
-1. Identify primary event
-2. Find events in time window
-3. Calculate temporal distance
-4. Group by service
-5. Score correlation confidence
-```
-
-## Docker Deployment
-
-### Image Structure
-```dockerfile
-FROM python:3.13-slim
-├── requirements.txt      # Dependencies
-├── mcp-croit-ceph.py    # Main server
-├── token_optimizer.py   # Optimization module
-└── croit_log_tools.py   # Log search tools
-```
-
-### Runtime Configuration
-```bash
-docker run -e CROIT_HOST=cluster:8080 \
-           -e CROIT_API_TOKEN=token \
-           ghcr.io/croit/mcp-croit-ceph
-```
+**Connection Pooling:**
+- HTTP: aiohttp.ClientSession (persistent connections)
+- WebSocket: Per-request connections (no pooling)
 
 ## Security Considerations
 
-### Token Management
-- Never log tokens
-- Environment variable preferred
-- Secure transmission only
-- Token rotation supported
+**Authentication:**
+- Bearer token in Authorization header
+- Binary WebSocket token authentication
+- No credential storage (environment variables only)
 
-### Data Filtering
-- Sensitive data detection
-- PII removal options
-- Audit log separation
-- Role-based filtering
+**Permission Enforcement:**
+- Role-based tool filtering (ADMIN vs VIEWER)
+- Category-level access control
+- No privilege escalation paths
 
-## Monitoring & Debugging
+**Input Validation:**
+- OpenAPI schema validation for API calls
+- Query parameter sanitization
+- Regex pattern validation in filters
 
-### Debug Mode
-```bash
-export LOG_LEVEL=DEBUG
-python mcp-croit-ceph.py --debug
-```
+## Operational Modes
 
-### Metrics Tracked
-- Query count and latency
-- Cache hit rate
-- WebSocket connection stability
-- Error rates by type
+### Hybrid Mode (Default)
+13 tools: 3 base discovery + 10 category-specific.
+Optimal balance between flexibility and usability.
 
-### Log Locations
-- Application logs: stderr
-- MCP protocol: stdio
-- Debug output: LOG_LEVEL=DEBUG
+### Base Only Mode
+3 tools: list_endpoints, call_endpoint, get_schema.
+Minimal footprint for maximum control.
 
-## Extension Points
+### Categories Only Mode
+10-15 tools: One per major operational category.
+Simplified interface for guided operations.
 
-### Adding New Patterns
-```python
-LogSearchIntentParser.PATTERNS['new_pattern'] = {
-    'regex': r'pattern',
-    'services': ['service'],
-    'levels': ['ERROR'],
-    'keywords': ['keyword']
-}
-```
+## Extensibility Points
 
-### Custom Filters
-```python
-def custom_filter(data):
-    # Filter implementation
-    return filtered_data
-```
+1. **New Tool Modes**: Add to mode validation in `__init__`
+2. **Additional Categories**: Extend category mapping in `_analyze_api_structure`
+3. **Custom Optimizations**: Add methods to TokenOptimizer class
+4. **Log Search Patterns**: Extend PATTERNS dict in LogSearchIntentParser
+5. **Debug Templates**: Add to CephDebugTemplates.TEMPLATES
 
-### New Tool Categories
-```python
-self.category_tools['new_category'] = {
-    'tool_name': tool_definition
-}
-```
+## Maintenance Guidelines
 
-## Testing
+### When to Update Documentation
 
-### Unit Tests
-```bash
-python -m pytest tests/
-```
+**File Changes:**
+- New classes/functions: Update relevant ARCHITECTURE.<slug>.md
+- Workflow changes: Update process documentation
+- New dependencies: Update this document
 
-### Integration Tests
-```bash
-docker-compose up -d
-python tests/integration.py
-```
+**API Changes:**
+- OpenAPI spec updates: No doc changes needed (dynamic)
+- New x-llm-hints fields: Update tool-generation-engine.md
+- New MCP protocol features: Update mcp-protocol-handlers.md
 
-### Load Testing
-```bash
-locust -f tests/load.py --host http://cluster:8080
-```
+### Documentation Review Cycle
 
-## Limitations
+**Quarterly:** Review all process and workflow docs
+**On Major Releases:** Full architecture audit
+**On Refactoring:** Immediate updates to affected components
 
-### WebSocket
-- 30-second timeout per query
-- 1MB message size limit
-- Single connection per query
+## Related Resources
 
-### Caching
-- In-memory only (no persistence)
-- 5-minute TTL (not configurable)
-- Limited to 100 cached queries
+- **User Guide**: README.md (integration and usage)
+- **AI Assistant Instructions**: CLAUDE.md (LLM-specific guidance)
+- **Build Configuration**: Dockerfile, build.sh
+- **CI/CD Pipeline**: .gitlab-ci.yml, .github/workflows/
 
-### Response Size
-- 30KB truncation limit
-- 100 logs maximum in response
-- 20 patterns per analysis
+## Version History
 
-## Recent Major Improvements (2024)
-
-### Search & Discovery Revolution
-1. **Smart Prioritization** - Ceph pools prioritized over DAOS pools
-2. **Intent-based filtering** - Filter by read/write/manage operations
-3. **Multi-word search** - "create rbd" matches "Create a new RBD"
-4. **Feature flags** - Disable unused endpoints for token savings
-5. **Quick-find tool** - Instant access to common categories
-
-### VictoriaLogs Integration
-1. **Direct JSON interface** - No translation layer complexity
-2. **Binary WebSocket auth** - Correct Croit protocol implementation
-3. **Full operator support** - _eq, _neq, _regex, _in, _nin, etc.
-4. **Control message handling** - "empty", "too_wide", error feedback
-5. **Real-time context** - Current timestamps injected automatically
-6. **Comprehensive field support** - All Ceph/system fields documented
-
-### Token Optimization Achievements
-- **Search optimization:** 89% reduction for targeted searches
-- **Feature filtering:** 16.9% overall endpoint reduction
-- **Smart truncation:** Priority results shown first
-- **Intent filtering:** 59-85% reduction per operation type
-
-## Future Enhancements
-
-### Planned Features
-1. VictoriaMetrics integration for performance data
-2. Log+Metrics correlation analysis
-3. Multi-cluster support
-4. Custom alert definitions
-5. Grafana dashboard integration
+**Current Architecture**: v0.4.x
+**Last Major Revision**: 2024-10 (Modular documentation structure)
+**Next Planned Revision**: TBD

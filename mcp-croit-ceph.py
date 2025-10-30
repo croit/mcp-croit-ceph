@@ -94,6 +94,8 @@ class CroitCephServer:
         # Feature flags
         self.enable_daos = enable_daos
         self.enable_specialty_features = enable_specialty_features
+        # Track if we've shown hints to reduce token usage
+        self.hints_shown = False
 
         # Validate mode
         if mode not in ["hybrid", "base_only", "categories_only"]:
@@ -656,6 +658,10 @@ Priority categories: ceph-pools, rbds, osds, servers, services, cluster"""
                             "enum": ["read", "write", "manage", "all"],
                             "description": "Intent-based filtering: read (GET), write (POST/PUT/PATCH), manage (DELETE), all (default)",
                         },
+                        "include_hints": {
+                            "type": "boolean",
+                            "description": "Include full x-llm-hints in response (default: true for first call, false after)",
+                        },
                     },
                 },
             )
@@ -664,14 +670,17 @@ Priority categories: ceph-pools, rbds, osds, servers, services, cluster"""
         # Base tool: call_endpoint with enhanced description
         call_endpoint_desc = """Call any API endpoint directly.
 
-Token Optimization & Filters:
+BUILT-IN FILTERING (Saves 90%+ tokens):
+Instead of fetching all data and filtering client-side, use _filter_* parameters:
+• _filter_status="error" - Get only items with error status
+• _filter_name="~ceph.*" - Regex matching (e.g., names starting with 'ceph')
+• _filter_size=">1000" - Numeric comparisons (>, <, >=, <=)
+• _filter__text="timeout" - Full-text search across all string fields
+• _filter__has="error_message" - Only items that have specific field
+• Multiple filters can be combined: _filter_status="error"&_filter_host="node1"
+
+Token Optimization:
 • Use limit parameter for pagination (e.g., query_params={"limit": 10})
-• Add _filter_* parameters to filter results:
-  - _filter_status="error" - Filter by status
-  - _filter_name="~pattern.*" - Regex filter
-  - _filter_size=">1000" - Numeric comparison
-  - _filter__text="search" - Full-text search
-  - _filter__has="field" - Has field check
 • Large responses are automatically truncated to save tokens
 
 The endpoint metadata from list_endpoints includes x-llm-hints with:
@@ -779,6 +788,134 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
             self._generate_category_tool(category)
 
         logger.info(f"Generated {len(self.mcp_tools)} tools total (hybrid mode)")
+
+    def _extract_schema_parameters(self, endpoint):
+        """
+        Extract parameter hints from OpenAPI schema when x-llm-hints are missing.
+        Returns parameter names and their metadata from the endpoint definition.
+        Fully resolves schema references and nested structures.
+        """
+        params = {}
+
+        # Extract query/path parameters from the parameters array
+        for param in endpoint.get("parameters", []):
+            param_name = param.get("name", "")
+            if param_name:
+                params[param_name] = {
+                    "type": param.get("in", "unknown"),
+                    "description": param.get("description", ""),
+                    "required": param.get("required", False),
+                }
+
+        # Extract body parameters from requestBody schema
+        request_body = endpoint.get("requestBody", {})
+        if request_body:
+            content = request_body.get("content", {})
+            json_content = content.get("application/json", {})
+            schema = json_content.get("schema", {})
+
+            # Recursively extract parameters from schema
+            self._extract_schema_properties(schema, params, prefix="", depth=0)
+
+        return params
+
+    def _extract_schema_properties(self, schema, params, prefix="", depth=0):
+        """
+        Recursively extract parameters from a schema, resolving references and nested structures.
+        """
+        # Prevent infinite recursion
+        if depth > 5:
+            return
+
+        # Handle schema references
+        if schema.get("$ref"):
+            ref_path = schema["$ref"]
+            if ref_path.startswith("#/components/schemas/"):
+                schema_name = ref_path.split("/")[-1]
+                resolved_schema = (
+                    self.api_spec.get("components", {})
+                    .get("schemas", {})
+                    .get(schema_name, {})
+                )
+                if resolved_schema:
+                    self._extract_schema_properties(
+                        resolved_schema, params, prefix, depth + 1
+                    )
+                return
+
+        # Handle direct properties
+        if schema.get("properties"):
+            required_fields = schema.get("required", [])
+            for prop_name, prop_def in schema["properties"].items():
+                full_name = f"{prefix}{prop_name}" if prefix else prop_name
+
+                # Get base description
+                description = prop_def.get("description", "")
+
+                # Handle array types (like osds[])
+                if prop_def.get("type") == "array":
+                    array_items = prop_def.get("items", {})
+                    description = (
+                        description or f"Array of {array_items.get('type', 'items')}"
+                    )
+
+                    # Add the array parameter itself
+                    params[full_name] = {
+                        "type": "body",
+                        "description": description,
+                        "required": prop_name in required_fields,
+                    }
+
+                    # Recursively extract array item properties with [] notation
+                    if array_items:
+                        self._extract_schema_properties(
+                            array_items,
+                            params,
+                            prefix=f"{full_name}[].",
+                            depth=depth + 1,
+                        )
+
+                # Handle object types
+                elif prop_def.get("type") == "object" or prop_def.get("properties"):
+                    # Add the object parameter itself
+                    params[full_name] = {
+                        "type": "body",
+                        "description": description or "Object with nested properties",
+                        "required": prop_name in required_fields,
+                    }
+
+                    # Recursively extract object properties with dot notation
+                    self._extract_schema_properties(
+                        prop_def, params, prefix=f"{full_name}.", depth=depth + 1
+                    )
+
+                # Handle schema references in properties
+                elif prop_def.get("$ref"):
+                    # Add the reference parameter
+                    params[full_name] = {
+                        "type": "body",
+                        "description": description
+                        or f"Reference to {prop_def['$ref'].split('/')[-1]}",
+                        "required": prop_name in required_fields,
+                    }
+
+                    # Recursively resolve the reference
+                    self._extract_schema_properties(
+                        prop_def, params, prefix=f"{full_name}.", depth=depth + 1
+                    )
+
+                # Handle primitive types
+                else:
+                    param_type = prop_def.get("type", "unknown")
+                    format_info = prop_def.get("format", "")
+                    if format_info:
+                        param_type = f"{param_type} ({format_info})"
+
+                    params[full_name] = {
+                        "type": "body",
+                        "description": description or f"{param_type} value",
+                        "required": prop_name in required_fields,
+                    }
 
     def _generate_category_tool(self, category: str):
         """
@@ -923,6 +1060,12 @@ Categories: ceph-pools (9), rbds (17), osds, servers, services, cluster, logs"""
 
                 if hints.get("response_shape") or hints.get("token_optimization"):
                     has_token_hints = True
+
+        # If no parameter hints from x-llm-hints, extract from schema
+        if not hint_params:
+            for ep in endpoints:
+                schema_params = self._extract_schema_parameters(ep)
+                hint_params.extend(schema_params.keys())
 
         # Build enhanced description with ALL hints (clean, professional format)
         if hint_purposes:
@@ -1577,6 +1720,12 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         search_term = arguments.get("search", "").lower()
         intent_filter = arguments.get("intent", "all")
 
+        # Determine if we should include hints (default: true for first call, false after)
+        include_hints = arguments.get("include_hints")
+        if include_hints is None:
+            include_hints = not self.hints_shown
+            self.hints_shown = True  # Mark as shown after first call
+
         results = []
         priority_results = []
 
@@ -1674,8 +1823,12 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                 }
 
                 # Add ALL LLM hints if present - let the AI decide what's important
-                if llm_hints:
+                # Only include if requested to reduce token usage
+                if llm_hints and include_hints:
                     endpoint_data["llm_hints"] = llm_hints
+                elif llm_hints and not include_hints:
+                    # Just include a summary indicator
+                    endpoint_data["has_hints"] = True
 
                 # Check if this should be prioritized
                 is_priority = False
@@ -1717,7 +1870,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         if intent_filter != "all":
             filtering_info.append(f"Intent filter: {intent_filter}")
 
-        return {
+        result = {
             "total": len(all_results),
             "priority_count": len(priority_results),
             "endpoints": all_results[:max_results],
@@ -1734,6 +1887,16 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                 "specialty_features_enabled": self.enable_specialty_features,
             },
         }
+
+        # Add hint about hints availability if not included
+        if not include_hints and any(
+            ep.get("has_hints") for ep in all_results[:max_results]
+        ):
+            result["hints_note"] = (
+                "x-llm-hints available but not shown (saves tokens). Use include_hints=true to see them."
+            )
+
+        return result
 
     async def _call_endpoint_direct(self, arguments: Dict) -> dict[str, Any]:
         """
@@ -1785,6 +1948,9 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         """
         resource_type = arguments.get("resource_type")
         action_type = arguments.get("action_type", "all")
+
+        # For quick_find, never include full hints to save tokens
+        include_hints = False
 
         # Map resource types to exact categories
         category_mapping = {
@@ -1853,8 +2019,9 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                     "deprecated": operation.get("deprecated", False),
                 }
 
+                # Only show that hints exist, not the full content (saves tokens)
                 if llm_hints:
-                    endpoint_data["llm_hints"] = llm_hints
+                    endpoint_data["has_hints"] = True
 
                 results.append(endpoint_data)
 
@@ -1873,7 +2040,8 @@ CURRENT TIME CONTEXT (for timestamp calculations):
             "total": len(results),
             "endpoints": results[:20],  # Limit to top 20 most relevant
             "truncated": len(results) > 20,
-            "optimization_note": f"Showing most relevant {target_category} endpoints",
+            "optimization_note": f"Showing most relevant endpoints for {resource_type}",
+            "hints_note": "x-llm-hints not shown in quick_find (saves tokens). Use list_endpoints with include_hints=true for full hints.",
         }
 
     def _endpoint_requires_pagination(self, endpoint_path: str) -> bool:
