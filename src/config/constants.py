@@ -128,8 +128,9 @@ DEFAULT_LOG_HOURS_BACK = 24
 # Maximum hours to search back in logs
 MAX_LOG_HOURS_BACK = 168  # 1 week
 
-# Default log search limit
-DEFAULT_LOG_LIMIT = 1000
+# Default log search limit (reduced from 1000 to prevent token overflow)
+# LLM responses with 1000 logs can exceed 200k tokens
+DEFAULT_LOG_LIMIT = 50
 
 # Maximum log entries to return
 MAX_LOG_ENTRIES = 10000
@@ -153,6 +154,12 @@ COMPRESSION_THRESHOLD_BYTES = 10240  # 10 KB
 
 # Maximum message length in log summaries (characters)
 MAX_LOG_MESSAGE_LENGTH = 200
+
+# Maximum log entries to return in MCP response (token limit protection)
+MAX_LOG_ENTRIES_IN_RESPONSE = 50
+
+# Maximum characters for full log response (approximate token limit)
+MAX_LOG_RESPONSE_CHARS = 50000  # ~12,500 tokens at 4 chars/token
 
 
 # =============================================================================

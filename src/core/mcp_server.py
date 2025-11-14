@@ -1090,7 +1090,7 @@ Example filters:
                         "required": prop_name in required_fields,
                     }
 
-    def _generate_category_tool(self, category: str):
+    def _generate_category_tool(self, category: str) -> Optional[types.Tool]:
         """
         Generate a category-specific tool for a given tag/category.
         """
@@ -1303,9 +1303,10 @@ Example filters:
         if hint_ceph_integration:
             if hint_ceph_integration.get("automatic_steps"):
                 steps = hint_ceph_integration["automatic_steps"]
-                description += "\n\nCeph Integration (automatic steps):"
-                for step in steps[:5]:  # Limit to 5 steps
-                    description += f"\n• {step}"
+                steps_text = "\n\nCeph Integration (automatic steps):\n" + "\n".join(
+                    f"• {step}" for step in steps[:5]
+                )
+                description += steps_text
 
         # Add workflow dependencies (NEW)
         if hint_workflow_dependencies:
@@ -1320,14 +1321,20 @@ Example filters:
             unique_params = list(set(hint_params))[:5]
             description += f"\n\nKey parameters: {', '.join(unique_params)}"
 
+        # Add optional sections efficiently
+        optional_sections = []
         if hint_examples:
-            description += "\n\nRequest examples available via list_endpoints"
-
+            optional_sections.append(
+                "\n\nRequest examples available via list_endpoints"
+            )
         if has_token_hints:
-            description += "\n\nToken optimization: Use filters and pagination"
-
+            optional_sections.append(
+                "\n\nToken optimization: Use filters and pagination"
+            )
         if has_confirmations:
-            description += "\n\nNote: Some operations require confirmation"
+            optional_sections.append("\n\nNote: Some operations require confirmation")
+
+        description += "".join(optional_sections)
 
         # Add endpoint examples
         example_ops = endpoints[:3]
@@ -1739,7 +1746,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                 write_stream,
                 InitializationOptions(
                     server_name="mcp-croit-ceph",
-                    server_version="0.2.0",
+                    server_version="0.5.0",
                     capabilities=self.server.get_capabilities(
                         notification_options=NotificationOptions(),
                         experimental_capabilities={},

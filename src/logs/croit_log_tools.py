@@ -345,7 +345,7 @@ class CroitLogSearchClient:
         port: int = DEFAULT_HTTP_PORT,
         api_token: Optional[str] = None,
         use_ssl: bool = False,
-    ):
+    ) -> None:
         self.host = host
         self.port = port
         self.api_token = api_token
@@ -2056,6 +2056,116 @@ async def _extract_logs_from_zip(zip_data: bytes) -> List[Dict]:
     return logs
 
 
+def _generate_log_summary(
+    logs: List[Dict], original_count: int, was_truncated: bool
+) -> Dict[str, Any]:
+    """
+    Generate intelligent summary of logs for LLM consumption.
+    Provides overview without overwhelming token budget.
+    """
+    from collections import Counter
+
+    if not logs:
+        return {
+            "text": "📊 No logs found matching criteria",
+            "total_entries": 0,
+            "priority_breakdown": {},
+            "service_breakdown": {},
+            "critical_events": [],
+        }
+
+    # Priority breakdown
+    priority_counter = Counter()
+    service_counter = Counter()
+    critical_events = []
+
+    priority_map = {
+        "ERROR": -10,
+        "WARN": -5,
+        "WARNING": -5,
+        "FATAL": -20,
+        "CRITICAL": -15,
+        "INFO": 0,
+        "DEBUG": 5,
+    }
+
+    for log in logs:
+        level = log.get("level", "INFO").upper()
+        priority_counter[level] += 1
+
+        # Extract service name
+        service = log.get("service", log.get("_SYSTEMD_UNIT", "unknown"))
+        if service:
+            # Clean service name
+            service = service.replace("ceph-", "").split("@")[0]
+            service_counter[service] += 1
+
+        # Track critical events
+        priority_score = priority_map.get(level, 0)
+        if priority_score <= -5:  # WARN or worse
+            critical_events.append(
+                {
+                    "priority": level,
+                    "timestamp": log.get("timestamp", log.get("_time", "unknown")),
+                    "service": service,
+                    "message_preview": log.get("message", "")[:100],
+                    "score": priority_score,
+                }
+            )
+
+    # Sort critical events by severity
+    critical_events.sort(key=lambda x: x["score"])
+
+    # Build summary text
+    total_displayed = len(logs)
+    error_count = priority_counter.get("ERROR", 0) + priority_counter.get("FATAL", 0)
+    warn_count = priority_counter.get("WARN", 0) + priority_counter.get("WARNING", 0)
+
+    summary_text = f"📊 Log Analysis Summary"
+    if was_truncated:
+        summary_text += (
+            f" - Showing {total_displayed} of {original_count} entries (truncated)"
+        )
+    else:
+        summary_text += f" - {total_displayed} total entries"
+
+    if error_count > 0:
+        summary_text += f"\n🚨 {error_count} ERRORS found"
+    if warn_count > 0:
+        summary_text += f"\n⚠️  {warn_count} WARNINGS found"
+
+    # Top services
+    top_services = service_counter.most_common(3)
+    if top_services:
+        summary_text += "\n\n📦 Top Services:"
+        for service, count in top_services:
+            summary_text += f"\n  • {service}: {count} entries"
+
+    # Critical events preview
+    if critical_events:
+        summary_text += f"\n\n🔥 Top {min(5, len(critical_events))} Critical Events:"
+        for event in critical_events[:5]:
+            summary_text += (
+                f"\n  • [{event['priority']}] {event['service']}: "
+                f"{event['message_preview']}..."
+            )
+
+    return {
+        "text": summary_text,
+        "total_entries": total_displayed,
+        "original_count": original_count,
+        "was_truncated": was_truncated,
+        "priority_breakdown": dict(priority_counter),
+        "service_breakdown": dict(service_counter.most_common(10)),
+        "critical_events": critical_events[:10],
+        "statistics": {
+            "error_count": error_count,
+            "warning_count": warn_count,
+            "info_count": priority_counter.get("INFO", 0),
+        },
+    }
+
+
 async def _execute_croit_http_export(
     host: str, port: int, api_token: str, use_ssl: bool, query: Dict
 ) -> Dict:
@@ -2368,11 +2478,76 @@ async def handle_log_search(
     # Calculate actual hours searched
     actual_hours_searched = (end - start) / 3600.0
 
+    # CRITICAL: Apply token-safe response optimization
+    # Import here to avoid circular dependency
+    from src.config.constants import (
+        MAX_LOG_ENTRIES_IN_RESPONSE,
+        MAX_LOG_MESSAGE_LENGTH,
+        MAX_LOG_RESPONSE_CHARS,
+    )
+
+    original_count = len(logs)
+    optimized_logs = logs
+    was_truncated = False
+    truncation_reason = None
+
+    # Strategy 1: Limit number of log entries
+    if len(logs) > MAX_LOG_ENTRIES_IN_RESPONSE:
+        # Prioritize by severity: ERROR > WARN > INFO
+        priority_map = {"ERROR": 0, "WARN": 1, "WARNING": 1, "INFO": 2, "DEBUG": 3}
+
+        def get_priority(log_entry):
+            level = log_entry.get("level", "INFO").upper()
+            return priority_map.get(level, 999)
+
+        sorted_logs = sorted(logs, key=get_priority)
+        optimized_logs = sorted_logs[:MAX_LOG_ENTRIES_IN_RESPONSE]
+        was_truncated = True
+        truncation_reason = (
+            f"Truncated from {original_count} to {MAX_LOG_ENTRIES_IN_RESPONSE} logs "
+            f"(prioritized by severity). Use 'limit' parameter to adjust."
+        )
+        logger.warning(
+            f"Token protection: Truncated response from {original_count} to {len(optimized_logs)} logs"
+        )
+
+    # Strategy 2: Truncate long messages
+    for log_entry in optimized_logs:
+        if (
+            "message" in log_entry
+            and len(log_entry["message"]) > MAX_LOG_MESSAGE_LENGTH
+        ):
+            original_msg = log_entry["message"]
+            log_entry["message"] = original_msg[:MAX_LOG_MESSAGE_LENGTH] + "..."
+            log_entry["_message_truncated"] = True
+
+    # Strategy 3: Estimate total response size and warn if still large
+    estimated_chars = sum(
+        len(str(log.get("message", ""))) + 100 for log in optimized_logs
+    )
+    size_warning = None
+    if estimated_chars > MAX_LOG_RESPONSE_CHARS:
+        size_warning = (
+            f"⚠️ Response is large (~{estimated_chars:,} chars). "
+            f"Consider using filters or reducing time range."
+        )
+        logger.warning(
+            f"Large response warning: ~{estimated_chars:,} chars (limit: {MAX_LOG_RESPONSE_CHARS:,})"
+        )
+
+    # Strategy 4: Generate intelligent summary
+    summary = _generate_log_summary(optimized_logs, original_count, was_truncated)
+
     return {
         "code": 200,
         "result": {
-            "logs": logs,
-            "total_count": len(logs),
+            "summary": summary,
+            "logs": optimized_logs,
+            "total_count": len(optimized_logs),
+            "original_count": original_count,
+            "was_truncated": was_truncated,
+            "truncation_info": truncation_reason if was_truncated else None,
+            "size_warning": size_warning,
             "control_messages": control_messages,
             "time_range": {
                 "start_timestamp": start,
@@ -2387,6 +2562,12 @@ async def handle_log_search(
             "timestamp_diff_seconds": end - start,
             "calculated_hours": actual_hours_searched,
             "input_hours_back": hours_back,
+            "optimization": {
+                "original_log_count": original_count,
+                "returned_log_count": len(optimized_logs),
+                "was_truncated": was_truncated,
+                "estimated_response_chars": estimated_chars,
+            },
         },
     }
 

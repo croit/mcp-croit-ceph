@@ -34,7 +34,7 @@ class CacheEntry:
 class ResponseCache:
     """Intelligent cache for API responses with TTL and size limits."""
 
-    def __init__(self, max_size: int = 100, default_ttl: int = 300):
+    def __init__(self, max_size: int = 100, default_ttl: int = 300) -> None:
         self.max_size = max_size
         self.default_ttl = default_ttl
         self._cache: Dict[str, CacheEntry] = {}

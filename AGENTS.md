@@ -28,11 +28,19 @@ Organized by functional areas like:
 🚀 **NEW FEATURES:**
 - **Smart Summaries**: Priority breakdown, service analysis, critical event extraction
 - **Intelligent Truncation**: Critical events prioritized over chronological order
+- **Token Protection**: Multi-level safeguards prevent 200k+ token overflows (v0.5.0)
 - **Log Level Shortcuts**: `search_errors()`, `search_warnings()`, `search_info()`, `search_critical()`
 - **Server Auto-Discovery**: Automatic detection of available server IDs
 - **Transport Analysis**: Debug kernel log availability with multiple strategies
 - **Template Queries**: 10 pre-built debugging scenarios
 - **Response Optimization**: Configurable size limits with critical event preservation
+
+⚠️ **TOKEN SAFETY (NEW in v0.5.0):**
+- Default limit reduced: 1000 → 50 logs (prevents context overflow)
+- Priority-based truncation: Most critical logs shown first
+- Automatic message truncation: 200 chars max per message
+- Always includes intelligent summary regardless of size
+- Typical savings: 85-92% token reduction on large log sets
 
 **Direct VictoriaLogs Syntax:**
 ```json
@@ -371,6 +379,11 @@ _filter_field=!value         # Not equals
 3. **Control messages**: Listen for "empty", "too_wide" feedback
 4. **Combine tools**: Use logs to understand issues, then API calls to fix them
 5. **Smart filtering**: Start broad, then narrow with specific operators
+6. **Token Management (NEW)**: 
+   - Default 50 log limit prevents context overflow
+   - Use `limit` parameter carefully (max 1000, but can cause token issues)
+   - Check summary first before requesting more logs
+   - Prioritize with filters to reduce result set
 
 ## Mode Selection
 
@@ -490,7 +503,7 @@ git push
 ### OpenAPI Spec Updates
 The `openapi.json` file is fetched from the Croit cluster and contains the API specification with x-llm-hints. To update x-llm-hints, changes must be made in the Croit API backend source code, not in this MCP project.
 
-Current status (as of v0.4.0):
+Current status (as of v0.5.0):
 - **580** total API endpoints
 - **575** endpoints with x-llm-hints (99.1% coverage)
 - **5** endpoints missing x-llm-hints

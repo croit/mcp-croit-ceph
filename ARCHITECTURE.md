@@ -365,7 +365,7 @@ services:
 
 The `openapi.json` file is auto-generated from the Croit API backend. To update x-llm-hints, changes must be made in the Croit API source code.
 
-**Current Status (v0.4.0):**
+**Current Status (v0.5.0):**
 - **580** total API endpoints
 - **575** endpoints with x-llm-hints (99.1% coverage)
 - **5** endpoints missing x-llm-hints

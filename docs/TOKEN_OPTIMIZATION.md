@@ -207,6 +207,85 @@ Return filtered full data
   - `create_smart_summary()`: Summary generation
   - `search_stored_response()`: Drill-down search
 
+## Log Search Token Protection (NEW in v0.5.0)
+
+### Problem
+
+Log searches for verbose services (e.g., Ceph MON) could return 1000+ log entries, causing 200k+ token responses that exceed LLM context limits.
+
+### Solution: Multi-Level Protection
+
+**Level 1: Reduced Default Limit**
+- `DEFAULT_LOG_LIMIT` reduced from 1000 → 50 entries
+- Prevents massive responses by default
+
+**Level 2: Priority-Based Truncation**
+- If response exceeds `MAX_LOG_ENTRIES_IN_RESPONSE` (50):
+  - Sort logs by severity (ERROR > WARN > INFO)
+  - Return top 50 most critical entries
+  - Add truncation warning
+
+**Level 3: Message Truncation**
+- Long messages truncated to `MAX_LOG_MESSAGE_LENGTH` (200 chars)
+- Adds `_message_truncated: true` flag
+
+**Level 4: Intelligent Summary**
+- Always generated, regardless of size
+- Provides:
+  - Priority breakdown (ERROR: 5, WARN: 23, INFO: 972)
+  - Service distribution
+  - Top 5 critical events
+  - Statistics and recommendations
+
+**Level 5: Size Warning**
+- Estimates total response size
+- Warns if exceeds `MAX_LOG_RESPONSE_CHARS` (50k chars ≈ 12.5k tokens)
+
+### Example Response
+
+```json
+{
+  "code": 200,
+  "result": {
+    "summary": {
+      "text": "📊 Log Analysis Summary - Showing 50 of 1,247 entries (truncated)\n🚨 5 ERRORS found\n⚠️ 23 WARNINGS found\n\n📦 Top Services:\n  • osd: 456 entries\n  • mon: 234 entries",
+      "priority_breakdown": {"ERROR": 5, "WARN": 23, "INFO": 22},
+      "critical_events": [
+        {
+          "priority": "ERROR",
+          "service": "osd",
+          "message_preview": "OSD failed to start: cannot access block device...",
+          "score": -10
+        }
+      ]
+    },
+    "logs": [...50 most critical logs...],
+    "total_count": 50,
+    "original_count": 1247,
+    "was_truncated": true,
+    "truncation_info": "Truncated from 1247 to 50 logs (prioritized by severity)"
+  }
+}
+```
+
+### Token Savings
+
+| Scenario | Before | After | Savings |
+|----------|--------|-------|---------|
+| MON logs (1000 entries) | 200k+ tokens | ~15k tokens | 92.5% |
+| OSD logs (500 entries) | 100k+ tokens | ~15k tokens | 85% |
+| General search (50 entries) | ~10k tokens | ~10k tokens | 0% (not truncated) |
+
+### Configuration Constants
+
+```python
+# src/config/constants.py
+DEFAULT_LOG_LIMIT = 50                    # Reduced from 1000
+MAX_LOG_ENTRIES_IN_RESPONSE = 50          # Hard limit
+MAX_LOG_MESSAGE_LENGTH = 200              # Char limit per message
+MAX_LOG_RESPONSE_CHARS = 50000            # Warning threshold
+```
+
 ## Future Enhancements
 
 - Configurable thresholds (currently hardcoded: 5, 50)
@@ -214,3 +293,4 @@ Return filtered full data
 - Automatic expiry of old responses (currently keeps all in memory)
 - Compression for very large stored responses
 - Statistics tracking for optimization effectiveness
+- User-configurable log limits per query
