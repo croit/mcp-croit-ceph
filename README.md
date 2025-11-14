@@ -49,6 +49,7 @@ docker run --rm -i \
 
 Add to `~/.config/claude/claude_desktop_config.json`:
 
+**Basic configuration** (fetches OpenAPI spec on startup):
 ```json
 {
   "mcpServers": {
@@ -56,8 +57,8 @@ Add to `~/.config/claude/claude_desktop_config.json`:
       "command": "docker",
       "args": [
         "run", "--rm", "-i",
-        "-e", "CROIT_HOST=https://your-cluster.com",
-        "-e", "CROIT_API_TOKEN=your-token",
+        "-e", "CROIT_HOST=http://your-cluster.croit.io:8080",
+        "-e", "CROIT_API_TOKEN=your-api-token-here",
         "croit/mcp-croit-ceph:latest"
       ]
     }
@@ -65,16 +66,77 @@ Add to `~/.config/claude/claude_desktop_config.json`:
 }
 ```
 
-Restart Claude Desktop, and you're ready to manage your Ceph cluster with AI!
+**Optimized configuration** (recommended - 2s startup instead of 5s):
+```json
+{
+  "mcpServers": {
+    "croit-ceph": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-v", "/absolute/path/to/openapi.json:/config/openapi.json:ro",
+        "-e", "CROIT_HOST=http://your-cluster.croit.io:8080",
+        "-e", "CROIT_API_TOKEN=your-api-token-here",
+        "-e", "OPENAPI_FILE=/config/openapi.json",
+        "croit/mcp-croit-ceph:latest"
+      ]
+    }
+  }
+}
+```
+
+**With debug logging:**
+```json
+{
+  "mcpServers": {
+    "croit-ceph": {
+      "command": "docker",
+      "args": [
+        "run", "--rm", "-i",
+        "-e", "CROIT_HOST=http://your-cluster.croit.io:8080",
+        "-e", "CROIT_API_TOKEN=your-api-token-here",
+        "-e", "LOG_LEVEL=DEBUG",
+        "croit/mcp-croit-ceph:latest"
+      ]
+    }
+  }
+}
+```
+
+**Note:** Volume mounts require absolute paths (not `~/`). To download the OpenAPI spec:
+```bash
+curl -H "Authorization: Bearer YOUR_TOKEN" \
+     http://your-cluster.croit.io:8080/api/swagger.json > openapi.json
+```
+
+Restart Claude Desktop after changing the configuration.
 
 ## Configuration
 
-Only two environment variables required:
+### Required Environment Variables
 
 ```bash
 CROIT_HOST="https://your-cluster.com"      # Your Croit cluster URL
 CROIT_API_TOKEN="your-api-token"           # API token from Croit
 ```
+
+### Optional Environment Variables
+
+```bash
+# Use local OpenAPI spec for faster startup (2s vs 5s)
+OPENAPI_FILE="/config/openapi.json"
+
+# Use bundled spec (no external fetch, for offline/dev)
+USE_INCLUDED_API_SPEC="true"
+
+# Logging verbosity: DEBUG, INFO, WARNING, ERROR
+LOG_LEVEL="INFO"
+
+# Pass additional CLI arguments
+MCP_ARGS="--no-permission-check --max-category-tools 5"
+```
+
+See `.env.example` for docker usage template.
 
 ### Getting an API Token
 

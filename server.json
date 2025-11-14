@@ -34,6 +34,21 @@
           "name": "CROIT_API_TOKEN",
           "description": "API authentication token for Croit cluster",
           "required": true
+        },
+        {
+          "name": "OPENAPI_FILE",
+          "description": "Path to local OpenAPI spec file (optional, overrides server fetch)",
+          "required": false
+        },
+        {
+          "name": "USE_INCLUDED_API_SPEC",
+          "description": "Use bundled OpenAPI spec (1/true/yes/on, optional)",
+          "required": false
+        },
+        {
+          "name": "LOG_LEVEL",
+          "description": "Logging verbosity: DEBUG, INFO, WARNING, ERROR (default: INFO)",
+          "required": false
         }
       ]
     }

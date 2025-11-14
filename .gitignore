@@ -3,3 +3,7 @@ venv/
 __pycache__
 *.pyc
 test_*.py
+
+# Environment and config files with secrets
+.env
+claude_desktop_config.json
