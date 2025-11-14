@@ -26110,8 +26110,8 @@
     },
     "/disks/{diskId}" : {
       "delete" : {
-        "summary" : "Remove disk from inventory",
-        "description" : "\n\t\t\tRemoves a disk entry from the croit inventory database without performing any cluster operations.\n\t\t\tThis is a lightweight inventory cleanup operation that only affects the database record.\n\n\t\t\t**Important**: This endpoint does NOT interact with Ceph or perform OSD operations.\n\t\t\tIt only removes the disk entry from croit's inventory database.\n\n\t\t\t**Use this endpoint when**:\n\t\t\t- Cleaning up stale inventory entries after hardware removal\n\t\t\t- Removing disk records after physical decommission\n\t\t\t- Correcting inventory after disk replacement\n\t\t\t- Database housekeeping tasks\n\n\t\t\t**Do NOT use this endpoint for**:\n\t\t\t- Removing active OSDs (use `DELETE /disks/wipe` with destroy=true instead)\n\t\t\t- Any operation requiring cluster coordination\n\t\t\t- Live disk operations on running systems\n\n\t\t\t**Prerequisites**: Ensure the disk is not in active use by Ceph OSDs or DAOS before removal.\n\t\t\tFor OSD disks, use DELETE /disks/wipe with destroy=true to properly handle OSD lifecycle.\n\t\t",
+        "summary" : "Remove disk from global inventory",
+        "description" : "\n\t\t\tRemoves a disk entry from croit inventory database without performing any cluster operations.\n\t\t\tThis is a lightweight inventory cleanup operation that only affects the database record.\n\n\t\t\t**CRITICAL**: This endpoint does NOT interact with Ceph or perform OSD operations.\n\t\t\tIt only removes the disk entry from croit's inventory database.\n\t\t\tNEVER use this endpoint for OSD removal or to wipe a disk.\n\n\t\t\t**Use this endpoint when**:\n\t\t\t- Cleaning up stale inventory entries after PHYSICAL hardware removal\n\t\t\t- Removing disk records after physical decommission\n\t\t\t- Correcting inventory after disk replacement\n\t\t\t- Database housekeeping tasks\n\n\t\t\t**Do NOT use this endpoint for**:\n\t\t\t- Removing active OSDs (use `DELETE /disks/wipe` with destroy=true instead)\n\t\t\t- Any operation requiring cluster coordination\n\t\t\t- Live disk operations on running systems\n\n\t\t\t**Prerequisites**: Ensure the disk is not in active use by Ceph OSDs or DAOS before removal.\n\t\t\tFor OSD disks, use DELETE /disks/wipe with destroy=true to properly handle OSD lifecycle.\n\t\t",
         "operationId" : "DiskResource_deleteDiskWithoutServerId",
         "tags" : [ "disks", "osds" ],
         "parameters" : [ {
@@ -26132,8 +26132,8 @@
           }
         },
         "x-llm-hints" : {
-          "purpose" : "Remove a disk entry from the inventory, typically after permanent removal or decommissioning.",
-          "usage" : [ "Call after detaching hardware or replacing a disk so it no longer appears in inventory.", "Use only when the disk is not referenced by DAOS or active OSDs." ],
+          "purpose" : "Remove disk entry from global inventory database ONLY - NEVER for OSD operations. Pure database cleanup.",
+          "usage" : [ "Clean up stale disk entries AFTER PHYSICAL hardware decommissioning", "Remove orphaned inventory records for disks that no longer exist", "Database housekeeping - NEVER for active OSDs or OSD removal" ],
           "response_shape" : "void",
           "path_parameters" : [ {
             "name" : "diskId",
@@ -26166,8 +26166,8 @@
             "note" : "Inventory cleanup"
           },
           "cache_hint" : "no-cache",
-          "related_endpoints" : [ "/disks", "/disks/create-osds", "/servers/{id}/disks" ],
-          "postprocessing_hint" : "Refresh GET /disks or /servers/{id}/disks to confirm the entry is gone.",
+          "related_endpoints" : [ "/disks", "/disks/create-osds", "/servers/{id}/disks", "/disks/wipe" ],
+          "postprocessing_hint" : "Refresh GET /disks or /servers/{id}/disks to confirm the entry is gone. CRITICAL: This endpoint NEVER interacts with Ceph cluster - use DELETE /disks/wipe with destroy=true for OSD operations.",
           "idempotent" : false,
           "requires_confirmation" : false
         },
@@ -48401,8 +48401,8 @@
         "x-required-permissions" : [ "admin" ]
       },
       "delete" : {
-        "summary" : "Remove disk from inventory",
-        "description" : "\n\t\t\tRemoves a disk entry from the inventory database without affecting any cluster operations.\n\t\t\tThis is used for housekeeping when a disk has been physically removed or replaced.\n\t\t\tThe disk will reappear in inventory after the next hardware detection if it's still present.\n\t\t\tFor active OSDs, use the disk wipe endpoint with destroy=true instead.\n\t\t",
+        "summary" : "Remove disk from server inventory",
+        "description" : "\n\t\t\tRemoves a disk entry from server inventory database without affecting any cluster operations.\n\t\t\tThis is used for housekeeping when a disk has been PHYSICALLY REMOVED or replaced.\n\t\t\tThe disk will reappear in inventory after next hardware detection if it's still present.\n\t\t\t\n\t\t\t**CRITICAL**: This endpoint NEVER removes OSDs from Ceph cluster.\n\t\t\tFor active OSDs, use DELETE /disks/wipe with destroy=true instead.\n\t\t\tNEVER use this endpoint for OSD operations.\n\n\t\t\t**Use this endpoint when**:\n\t\t\t- Cleaning up stale disk entries after PHYSICAL hardware removal from specific server\n\t\t\t- Removing inventory records for FAILED disks that will never return\n\t\t\t- Database cleanup AFTER disk replacement on specific server\n\n\t\t\t**Do NOT use this endpoint for**:\n\t\t\t- Removing active OSDs (use DELETE /disks/wipe with destroy=true instead)\n\t\t\t- Any operation requiring cluster coordination\n\t\t",
         "operationId" : "ServerResource_deleteDisk",
         "tags" : [ "servers" ],
         "parameters" : [ {
@@ -48431,8 +48431,8 @@
           }
         },
         "x-llm-hints" : {
-          "purpose" : "Remove a disk entry from the inventory database without affecting cluster operations",
-          "usage" : [ "Clean up stale disk entries when hardware has been physically removed", "Remove records for failed disks that will not return", "Clean inventory after disk replacement before hardware re-detection" ],
+          "purpose" : "Remove disk entry from server inventory database ONLY - NEVER for OSD operations. This is purely inventory housekeeping.",
+          "usage" : [ "Clean up stale disk entries after PHYSICAL hardware removal", "Remove inventory records for FAILED disks that will never return", "Database cleanup AFTER disk replacement - NEVER for active OSDs" ],
           "response_shape" : "void",
           "path_parameters" : [ {
             "name" : "id",
@@ -48477,8 +48477,8 @@
             "note" : "Disk inventory cleanup"
           },
           "cache_hint" : "no-cache",
-          "related_endpoints" : [ "/servers/{id}/disks", "/servers/{id}/disks/{diskId}/smart" ],
-          "postprocessing_hint" : "Disk will reappear in inventory after next hardware detection if still physically present",
+          "related_endpoints" : [ "/servers/{id}/disks", "/servers/{id}/disks/{diskId}/smart", "/disks/wipe" ],
+          "postprocessing_hint" : "Disk will reappear in inventory after next hardware detection if still physically present. CRITICAL: This endpoint NEVER removes OSDs - use DELETE /disks/wipe with destroy=true for OSD operations.",
           "idempotent" : true,
           "requires_confirmation" : false
         },

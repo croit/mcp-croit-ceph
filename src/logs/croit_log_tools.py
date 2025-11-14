@@ -17,6 +17,17 @@ import aiohttp
 import zipfile
 import io
 
+# Import utility functions
+from src.utils.helpers import calculate_time_range
+
+# Import constants
+from src.config.constants import (
+    DEFAULT_LOG_LIMIT,
+    LOG_ANALYSIS_SAMPLE_SIZE,
+    LOG_MEDIUM_SAMPLE_SIZE,
+    DEFAULT_HTTP_PORT,
+)
+
 logger = logging.getLogger(__name__)
 
 
@@ -331,7 +342,7 @@ class CroitLogSearchClient:
     def __init__(
         self,
         host: str,
-        port: int = 8080,
+        port: int = DEFAULT_HTTP_PORT,
         api_token: Optional[str] = None,
         use_ssl: bool = False,
     ):
@@ -385,8 +396,16 @@ class CroitLogSearchClient:
         try:
             logs = await self._execute_websocket_query(request)
             logger.debug(f"WebSocket query successful: {len(logs)} logs returned")
-        except Exception as e:
-            logger.error(f"WebSocket failed: {e}, falling back to HTTP")
+        except (
+            websockets.exceptions.WebSocketException,
+            ConnectionError,
+            OSError,
+            asyncio.TimeoutError,
+        ) as e:
+            # WebSocket connection issues - fall back to HTTP
+            logger.warning(
+                f"WebSocket failed ({type(e).__name__}), falling back to HTTP: {e}"
+            )
             logs = await self._execute_http_query(request)
             logger.debug(f"HTTP fallback completed: {len(logs)} logs returned")
 
@@ -515,8 +534,7 @@ class CroitLogSearchClient:
             query_conditions.append({"CROIT_SERVERID": {"_eq": server_id}})
 
         # Time range
-        start_time = int((datetime.now() - timedelta(hours=hours_back)).timestamp())
-        end_time = int(datetime.now().timestamp())
+        start_time, end_time = calculate_time_range(hours_back)
 
         # Search text
         search_text = search_query.strip() if search_query.strip() else ""
@@ -554,8 +572,13 @@ class CroitLogSearchClient:
         try:
             logs = await self._execute_http_query(base_query)
             logger.debug(f"Parameterized search completed: {len(logs)} logs returned")
-        except Exception as e:
-            logger.error(f"Parameterized search failed: {e}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            # Network errors during HTTP query
+            logger.error(f"Parameterized search failed ({type(e).__name__}): {e}")
+            logs = []
+        except json.JSONDecodeError as e:
+            # Invalid JSON response
+            logger.error(f"Invalid JSON in search response: {e}")
             logs = []
 
         # Calculate actual hours searched
@@ -738,8 +761,17 @@ class CroitLogSearchClient:
                     except websockets.exceptions.ConnectionClosed:
                         break
 
-        except Exception as e:
-            logger.error(f"WebSocket error: {e}")
+        except websockets.exceptions.WebSocketException as e:
+            # WebSocket protocol errors
+            logger.error(f"WebSocket protocol error: {e}")
+            raise
+        except (ConnectionError, OSError) as e:
+            # Connection/network errors
+            logger.error(f"WebSocket connection error: {e}")
+            raise
+        except json.JSONDecodeError as e:
+            # Invalid JSON in WebSocket message
+            logger.error(f"Invalid JSON in WebSocket message: {e}")
             raise
 
         return logs
@@ -786,8 +818,15 @@ class CroitLogSearchClient:
                         logger.error(f"HTTP query failed with status {response.status}")
                         logger.error(f"Error response body: {response_text}")
 
-        except Exception as e:
-            logger.error(f"HTTP query failed: {e}")
+        except aiohttp.ClientError as e:
+            # Network/connection errors
+            logger.error(f"HTTP query failed - connection error: {e}")
+        except asyncio.TimeoutError:
+            # Request timeout
+            logger.error(f"HTTP query failed - timeout")
+        except json.JSONDecodeError as e:
+            # Invalid JSON response
+            logger.error(f"HTTP query failed - invalid JSON: {e}")
 
         return logs
 
@@ -831,7 +870,9 @@ class CroitLogSearchClient:
                     ts = datetime.fromisoformat(log["timestamp"].replace("Z", "+00:00"))
                     bucket = ts.strftime("%Y-%m-%d %H:%M")
                     time_buckets[bucket].append(log)
-                except:
+                except (ValueError, AttributeError) as e:
+                    # Invalid timestamp format, skip this log entry
+                    logger.debug(f"Invalid timestamp in log entry: {e}")
                     continue
 
         for bucket, bucket_logs in time_buckets.items():
@@ -1241,13 +1282,14 @@ class ServerIDDetector:
             return self.server_cache
 
         # Query recent logs to find server IDs
+        start_time, end_time = calculate_time_range(24)
         detection_query = {
             "type": "query",
-            "start": int((datetime.now() - timedelta(hours=24)).timestamp()),
-            "end": int(datetime.now().timestamp()),
+            "start": start_time,
+            "end": end_time,
             "query": {
-                "where": {"_search": ""},  # Get any logs to analyze server distribution
-                "limit": 1000,
+                "where": {"CROIT_SERVER_ID": {"_exists": True}},
+                "limit": LOG_ANALYSIS_SAMPLE_SIZE,  # Larger sample for server detection
             },
         }
 
@@ -1260,8 +1302,13 @@ class ServerIDDetector:
 
             return server_info
 
-        except Exception as e:
-            logger.error(f"Server detection failed: {e}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            # Network errors during server detection
+            logger.error(f"Server detection failed - network error: {e}")
+            return {}
+        except (KeyError, ValueError, TypeError) as e:
+            # Data parsing errors
+            logger.error(f"Server detection failed - data error: {e}")
             return {}
 
     def _analyze_server_distribution(self, logs: List[Dict]) -> Dict[str, Any]:
@@ -1419,15 +1466,16 @@ class LogTransportAnalyzer:
         """Analyze what transport types are available in the logs"""
 
         # Query recent logs to analyze transports
+        start_time, end_time = calculate_time_range(hours_back)
         analysis_query = {
             "type": "query",
-            "start": int((datetime.now() - timedelta(hours=hours_back)).timestamp()),
-            "end": int(datetime.now().timestamp()),
+            "start": start_time,
+            "end": end_time,
             "query": {
                 "where": {
                     "_search": ""  # Get any logs to analyze transport distribution
                 },
-                "limit": 2000,  # Larger sample for transport analysis
+                "limit": LOG_MEDIUM_SAMPLE_SIZE,  # Larger sample for transport analysis
             },
         }
 
@@ -1435,8 +1483,13 @@ class LogTransportAnalyzer:
             logs = await self.client._execute_http_query(analysis_query)
             return self._analyze_transport_distribution(logs)
 
-        except Exception as e:
-            logger.error(f"Transport analysis failed: {e}")
+        except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+            # Network errors during transport analysis
+            logger.error(f"Transport analysis failed - network error: {e}")
+            return {}
+        except (KeyError, ValueError, TypeError) as e:
+            # Data parsing/analysis errors
+            logger.error(f"Transport analysis failed - data error: {e}")
             return {}
 
     def _analyze_transport_distribution(self, logs: List[Dict]) -> Dict[str, Any]:
@@ -1595,12 +1648,11 @@ class LogTransportAnalyzer:
 
         for strategy in strategies:
             try:
+                start_time, end_time = calculate_time_range(hours_back)
                 query = {
                     "type": "query",
-                    "start": int(
-                        (datetime.now() - timedelta(hours=hours_back)).timestamp()
-                    ),
-                    "end": int(datetime.now().timestamp()),
+                    "start": start_time,
+                    "end": end_time,
                     "query": {**strategy["query"], "limit": limit},
                 }
 
@@ -1991,8 +2043,15 @@ async def _extract_logs_from_zip(zip_data: bytes) -> List[Dict]:
                                     }
                                 )
 
-    except Exception as e:
-        logger.error(f"Failed to extract logs from ZIP: {e}")
+    except zipfile.BadZipFile as e:
+        # Invalid or corrupt ZIP file
+        logger.error(f"Failed to extract logs - invalid ZIP file: {e}")
+    except (OSError, IOError) as e:
+        # File I/O errors
+        logger.error(f"Failed to extract logs - I/O error: {e}")
+    except json.JSONDecodeError as e:
+        # Invalid JSON in ZIP content
+        logger.error(f"Failed to extract logs - invalid JSON: {e}")
 
     return logs
 
@@ -2097,9 +2156,31 @@ async def _execute_croit_http_export(
                         ],
                     }
 
-    except Exception as e:
-        logger.error(f"HTTP query exception: {e}")
-        return {"logs": [], "control_messages": [{"type": "error", "message": str(e)}]}
+    except aiohttp.ClientError as e:
+        # Network/connection errors
+        logger.error(f"HTTP query failed - connection error: {e}")
+        return {
+            "logs": [],
+            "control_messages": [
+                {"type": "error", "message": f"Connection error: {str(e)}"}
+            ],
+        }
+    except asyncio.TimeoutError:
+        # Request timeout
+        logger.error("HTTP query failed - timeout")
+        return {
+            "logs": [],
+            "control_messages": [{"type": "error", "message": "Request timeout"}],
+        }
+    except json.JSONDecodeError as e:
+        # Invalid JSON response
+        logger.error(f"HTTP query failed - invalid JSON: {e}")
+        return {
+            "logs": [],
+            "control_messages": [
+                {"type": "error", "message": f"Invalid JSON response: {str(e)}"}
+            ],
+        }
 
 
 async def _execute_croit_websocket(
@@ -2202,8 +2283,17 @@ async def _execute_croit_websocket(
                 except websockets.exceptions.ConnectionClosed:
                     break
 
-    except Exception as e:
-        logger.error(f"WebSocket query failed: {e}")
+    except websockets.exceptions.WebSocketException as e:
+        # WebSocket protocol errors
+        logger.error(f"WebSocket query failed - protocol error: {e}")
+        raise
+    except (ConnectionError, OSError) as e:
+        # Network/connection errors
+        logger.error(f"WebSocket query failed - connection error: {e}")
+        raise
+    except json.JSONDecodeError as e:
+        # Invalid JSON in messages
+        logger.error(f"WebSocket query failed - invalid JSON: {e}")
         raise
 
     logger.debug(
@@ -2214,15 +2304,16 @@ async def _execute_croit_websocket(
 
 # Integration functions for MCP Server
 async def handle_log_search(
-    arguments: Dict, host: str, port: int = 8080
+    arguments: Dict, host: str, port: int = DEFAULT_HTTP_PORT
 ) -> Dict[str, Any]:
     """Handle direct VictoriaLogs JSON query"""
     import time
     from datetime import datetime, timedelta
 
+    # Extract where clause
     where_clause = arguments.get("where")
     search_text = arguments.get("_search", "")
-    limit = arguments.get("limit", 1000)
+    limit = arguments.get("limit", DEFAULT_LOG_LIMIT)
     after = arguments.get("after", 0)
     hours_back = arguments.get("hours_back", 1)
     start_timestamp = arguments.get("start_timestamp")
@@ -2230,87 +2321,78 @@ async def handle_log_search(
     api_token = arguments.get("api_token")
     use_ssl = arguments.get("use_ssl", False)
 
-    if not where_clause:
-        return {"code": 400, "error": "VictoriaLogs 'where' clause is required"}
+    # Calculate time range
+    if start_timestamp and end_timestamp:
+        start = int(start_timestamp)
+        end = int(end_timestamp)
+    else:
+        start, end = calculate_time_range(hours_back)
 
-    try:
-        # Calculate time range
-        if start_timestamp and end_timestamp:
-            start = start_timestamp
-            end = end_timestamp
+    # Build where clause
+    query_where = where_clause if where_clause else {}
+
+    # Add search text if provided
+    if search_text:
+        if "_and" in query_where:
+            query_where["_and"].append({"_search": search_text})
+        elif "_or" in query_where:
+            # Wrap in AND with search
+            query_where = {"_and": [query_where, {"_search": search_text}]}
         else:
-            end = int(time.time())
-            start = end - (hours_back * 3600)
+            query_where = {"_and": [query_where, {"_search": search_text}]}
 
-        # Build Croit WebSocket query - match working examples
-        query_where = where_clause.copy() if where_clause else {}
+    # Build Croit log export query
+    croit_query = {
+        "type": "query",
+        "start": start,
+        "end": end,
+        "query": {"where": query_where, "after": after, "limit": limit},
+    }
 
-        # Add _search to the where clause (always, even if empty string)
-        query_where["_search"] = search_text
+    # Execute query via HTTP (not WebSocket!)
+    logger.debug(f"Executing HTTP query to {host}:{port}")
+    response = await _execute_croit_http_export(
+        host, port, api_token, use_ssl, croit_query
+    )
+    logs = response.get("logs", [])
+    control_messages = response.get("control_messages", [])
 
-        croit_query = {
-            "type": "query",
-            "start": start,
-            "end": end,
-            "query": {"where": query_where, "after": after, "limit": limit},
-        }
-
-        # Execute query via HTTP (not WebSocket!)
-        logger.debug(f"Executing HTTP query to {host}:{port}")
-        response = await _execute_croit_http_export(
-            host, port, api_token, use_ssl, croit_query
-        )
-        logs = response.get("logs", [])
-        control_messages = response.get("control_messages", [])
-
+    logger.debug(
+        f"HTTP response summary: {len(logs)} logs, {len(control_messages)} control messages"
+    )
+    if control_messages:
         logger.debug(
-            f"HTTP response summary: {len(logs)} logs, {len(control_messages)} control messages"
+            f"Control messages received: {[msg.get('type', 'unknown') for msg in control_messages]}"
         )
-        if control_messages:
-            logger.debug(
-                f"Control messages received: {[msg.get('type', 'unknown') for msg in control_messages]}"
-            )
-        if not logs and control_messages:
-            logger.warning(f"No logs returned. Control messages: {control_messages}")
 
-        # Calculate actual hours searched from timestamp difference
-        actual_hours_searched = (end - start) / 3600.0
+    # Calculate actual hours searched
+    actual_hours_searched = (end - start) / 3600.0
 
-        return {
-            "code": 200,
-            "result": {
-                "logs": logs,
-                "total_count": len(logs),
-                "control_messages": control_messages,
-                "time_range": {
-                    "start_timestamp": start,
-                    "end_timestamp": end,
-                    "hours_searched": actual_hours_searched,
-                },
+    return {
+        "code": 200,
+        "result": {
+            "logs": logs,
+            "total_count": len(logs),
+            "control_messages": control_messages,
+            "time_range": {
+                "start_timestamp": start,
+                "end_timestamp": end,
+                "hours_searched": actual_hours_searched,
             },
-            "debug": {
-                "croit_query": croit_query,
-                "where_clause": where_clause,
-                "time_range_human": f"{datetime.fromtimestamp(start)} to {datetime.fromtimestamp(end)}",
-                "timestamp_diff_seconds": end - start,
-                "calculated_hours": actual_hours_searched,
-                "input_hours_back": hours_back,
-            },
-        }
-
-    except Exception as e:
-        logger.error(f"Log search failed: {e}")
-        return {
-            "code": 500,
-            "error": str(e),
-            "debug": {
-                "attempted_query": croit_query if "croit_query" in locals() else None
-            },
-        }
+        },
+        "debug": {
+            "croit_query": croit_query,
+            "where_clause": where_clause,
+            "time_range_human": f"{datetime.fromtimestamp(start)} to {datetime.fromtimestamp(end)}",
+            "timestamp_diff_seconds": end - start,
+            "calculated_hours": actual_hours_searched,
+            "input_hours_back": hours_back,
+        },
+    }
 
 
 async def handle_log_check(
-    arguments: Dict, host: str, port: int = 8080
+    arguments: Dict, host: str, port: int = DEFAULT_HTTP_PORT
 ) -> Dict[str, Any]:
     """
     Check log conditions immediately (snapshot) - suitable for LLMs
@@ -2378,14 +2460,23 @@ async def handle_log_check(
             },
         }
 
+    except (aiohttp.ClientError, asyncio.TimeoutError) as e:
+        # Network errors during log check
+        logger.error(f"Log check failed - network error: {e}")
+        return {"code": 503, "error": f"Network error: {str(e)}"}
+    except (KeyError, ValueError, TypeError) as e:
+        # Data/argument errors
+        logger.error(f"Log check failed - data error: {e}")
+        return {"code": 400, "error": f"Invalid data: {str(e)}"}
     except Exception as e:
-        logger.error(f"Log check failed: {e}")
+        # Unexpected errors
+        logger.error(f"Log check failed - unexpected error: {type(e).__name__}: {e}")
         return {"code": 500, "error": str(e)}
 
 
 # Keep for backwards compatibility but mark as deprecated
 async def handle_log_monitor(
-    arguments: Dict, host: str, port: int = 8080
+    arguments: Dict, host: str, port: int = DEFAULT_HTTP_PORT
 ) -> Dict[str, Any]:
     """DEPRECATED: Use handle_log_check instead - this blocks for too long"""
     # Redirect to log_check with a warning
