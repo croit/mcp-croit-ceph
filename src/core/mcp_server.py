@@ -2030,6 +2030,7 @@ CURRENT TIME CONTEXT (for timestamp calculations):
 
                 summary = operation.get("summary", "")
                 description = operation.get("description", "")
+                llm_hints = operation.get("x-llm-hints", {})
 
                 if search_term:
                     # Support both full phrase and individual word matching
