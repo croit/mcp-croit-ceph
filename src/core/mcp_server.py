@@ -734,6 +734,12 @@ Token Optimization & Smart Search:
 • Filter by category to reduce response size
 • Smart truncation shows priority results first
 
+⚠️ IMPORTANT - Token Optimization:
+• include_hints defaults to FALSE - only request when you need workflow guidance
+• Use specific search terms and intent filters to reduce result count
+• Get hints ONLY for the endpoint you'll actually use
+• Large hint responses (>10 endpoints) will trigger a warning
+
 Available Fields Feature:
 • GET endpoints include 'available_fields' array
 • Shows all fields you can request with the 'fields' parameter
@@ -746,10 +752,15 @@ Intent-based filtering:
 • intent="manage" - Only DELETE operations (remove, destroy)
 • intent="all" - All operations (default)
 
+Recommended Workflow:
+1. First call: include_hints=false, narrow search with intent
+2. Identify the specific endpoint you need
+3. Second call: include_hints=true for ONLY that endpoint
+
 Example usage:
-• search="pool", intent="read" - Only pool status/list endpoints
-• category="ceph-pools", intent="write" - Only pool creation/modification
-• search="rbd", intent="manage" - Only RBD deletion endpoints
+• search="pool", intent="read", include_hints=false - Quick overview
+• search="wipe disk", intent="manage", include_hints=true - Get full guidance
+• category="ceph-pools", intent="write" - Pool creation endpoints
 
 Priority categories: ceph-pools, rbds, osds, servers, services, cluster"""
 
@@ -780,7 +791,7 @@ Priority categories: ceph-pools, rbds, osds, servers, services, cluster"""
                         },
                         "include_hints": {
                             "type": "boolean",
-                            "description": "Include full x-llm-hints in response (default: true for first call, false after)",
+                            "description": "Include full x-llm-hints in response (default: false - only request when you need workflow guidance)",
                         },
                     },
                 },
@@ -1960,11 +1971,8 @@ CURRENT TIME CONTEXT (for timestamp calculations):
         search_term = arguments.get("search", "").lower()
         intent_filter = arguments.get("intent", "all")
 
-        # Determine if we should include hints (default: true for first call, false after)
-        include_hints = arguments.get("include_hints")
-        if include_hints is None:
-            include_hints = not self.hints_shown
-            self.hints_shown = True  # Mark as shown after first call
+        # Determine if we should include hints (default: false for token optimization)
+        include_hints = arguments.get("include_hints", False)
 
         results = []
         priority_results = []
@@ -2185,6 +2193,15 @@ CURRENT TIME CONTEXT (for timestamp calculations):
             result["hints_note"] = (
                 "x-llm-hints available but not shown (saves tokens). Use include_hints=true to see them."
             )
+
+        # Add warning if hints requested for many endpoints (token optimization)
+        if include_hints and len(all_results[:max_results]) > 10:
+            estimated_tokens = len(all_results[:max_results]) * 700
+            result["token_warning"] = {
+                "message": f"⚠️ Large response with hints: {len(all_results[:max_results])} endpoints with full x-llm-hints",
+                "estimated_tokens": estimated_tokens,
+                "suggestion": "Consider: 1) Set include_hints=false for overview, 2) Use more specific search terms, 3) Add intent filter, 4) Request hints only for the specific endpoint you'll use",
+            }
 
         return result
 
