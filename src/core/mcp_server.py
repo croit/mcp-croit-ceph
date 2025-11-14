@@ -2029,30 +2029,36 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                     continue
 
                 summary = operation.get("summary", "")
+                description = operation.get("description", "")
+
                 if search_term:
                     # Support both full phrase and individual word matching
                     path_lower = path.lower()
                     summary_lower = summary.lower()
+                    description_lower = description.lower()
 
                     # Try exact phrase match first
-                    if search_term in path_lower or search_term in summary_lower:
+                    if (
+                        search_term in path_lower
+                        or search_term in summary_lower
+                        or search_term in description_lower
+                    ):
                         pass  # Found exact match, continue
                     else:
                         # Try individual word matching for multi-word searches
                         search_words = search_term.split()
                         if len(search_words) > 1:
-                            # All words must be found somewhere in path or summary
+                            # All words must be found somewhere in path, summary, or description
                             if not all(
-                                word in path_lower or word in summary_lower
+                                word in path_lower
+                                or word in summary_lower
+                                or word in description_lower
                                 for word in search_words
                             ):
                                 continue
                         else:
-                            # Single word that didn't match exactly, skip
                             continue
 
-                # Extract key LLM hints
-                llm_hints = operation.get("x-llm-hints", {})
                 endpoint_data = {
                     "path": path,
                     "method": method.upper(),
@@ -2061,6 +2067,15 @@ CURRENT TIME CONTEXT (for timestamp calculations):
                     "tags": tags,
                     "deprecated": operation.get("deprecated", False),
                 }
+
+                # Add description if it exists and differs from summary
+                if description and description != summary:
+                    endpoint_data["description"] = description
+
+                # Add required permissions if available
+                required_perms = operation.get("x-required-permissions")
+                if required_perms:
+                    endpoint_data["required_permissions"] = required_perms
 
                 # Add available response fields for token optimization
                 if method.lower() == "get":
@@ -2284,14 +2299,26 @@ CURRENT TIME CONTEXT (for timestamp calculations):
 
                 # Build endpoint data
                 llm_hints = operation.get("x-llm-hints", {})
+                summary = operation.get("summary", "")
+                description = operation.get("description", "")
+
                 endpoint_data = {
                     "path": path,
                     "method": method.upper(),
                     "operationId": operation.get("operationId", ""),
-                    "summary": operation.get("summary", ""),
+                    "summary": summary,
                     "tags": tags,
                     "deprecated": operation.get("deprecated", False),
                 }
+
+                # Add description if it exists and differs from summary
+                if description and description != summary:
+                    endpoint_data["description"] = description
+
+                # Add required permissions if available
+                required_perms = operation.get("x-required-permissions")
+                if required_perms:
+                    endpoint_data["required_permissions"] = required_perms
 
                 # Only show that hints exist, not the full content (saves tokens)
                 if llm_hints:
